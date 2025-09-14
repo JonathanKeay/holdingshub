@@ -1,0 +1,73 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+
+  /* Inter with system fallback */
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  /* Theme blue */
+  --color-themeblue: #1a4474;
+  --color-themeblue-hover: #0f2743;
+  --color-themeblue-disabled: #75a2b9ff;
+  --color-themeblue-disabled-bg: #75a2b9ff;
+
+  /* Custom reds */
+  --color-tred: #c62828;
+  --color-tred-bg: #FFEBEE;
+  --color-tred-hover: #B71C1C;
+
+  /* Custom greens */
+  --color-tgreen: #2E7D32;
+  --color-tgreen-bg: #E8F5E9;
+  --color-tgreen-hover: #1B5E20;
+
+  /* Additional palette */
+  --color-Tsoft-tint: #eaf1f8;          /* For table row backgrounds / soft panels */
+  --color-Thoverlight-tint: #d5e3f1;    /* For hover state backgrounds */
+  --color-Tdivider: #b7c8db;            /* For table borders, separators */
+  --color-Tdark-shade: #0f2743;         /* For headings or sidebar */
+  --color-success: #28a745;             /* For confirmations, positive values */
+  --color-error: #d64545;               /* For warnings, negative values */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+/* Compact table rows: less vertical padding, slightly tighter line-height (keeps font-size) */
+.table-compact td,
+.table-compact th {
+  padding-top: 0.25rem;    /* 4px */
+  padding-bottom: 0.25rem; /* 4px */
+  line-height: 1.05;       /* slightly tighter without changing font-size */
+  vertical-align: middle;
+}
+
+/* Compact a single table row: reduce vertical padding and slightly tighten line-height
+   Applied via class on the <tr> so only targeted footer rows change. */
+tr.row-compact > td,
+tr.row-compact > th {
+  padding-top: 0.25rem;    /* 4px */
+  padding-bottom: 0.25rem; /* 4px */
+  line-height: 1.05;
+  vertical-align: middle;
+}

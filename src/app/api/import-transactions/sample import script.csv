@@ -1,0 +1,11 @@
+,,,,,,,,
+,,,,,,,,
+,,,,,,,,
+,,,,,,,,
+,,,,,,,,
+,,,,,,,,
+,,,,,,,,
+,,,,,,,,
+,,"buy, sell, div, tran,dep,int",YYYY-MM-DDTHH:MM:SS±HH:MM,,,,,
+,,,,,,,,
+portfolio,ticker,transaction_type,date_time,quantity,price,fees,gbp_value,notes
