@@ -20,6 +20,7 @@ import {
   THEME_BLUE_DISABLED_BG,
 } from '@/lib/uiColors';
 import { unstable_cache } from 'next/cache';
+import { redirect } from 'next/navigation';
 
 // Cache FX for 60s; cache prices for 30s (keyed by sorted tickers)
 const getFxCached = unstable_cache(fetchExchangeRatesToGBP, ['fx-v1'], { revalidate: 60 });
@@ -34,6 +35,14 @@ const getPricesCached = unstable_cache(
 
 export default async function Dashboard() {
   const supabase = await getSupabaseServerClient();
+
+  // Guard: if no session, redirect to /login
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) {
+    redirect('/login');
+  }
 
   // Kick off everything in parallel
   const settingsPromise = supabase

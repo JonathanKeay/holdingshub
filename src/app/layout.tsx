@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { Sidebar } from "./_components/sidebar"; // ✅ Import sidebar
+import { Sidebar } from "@/components/Sidebar";
 import PortfolioLayoutApplier from './PortfolioLayoutApplier';
-import UserMenu from '@/components/UserMenu';
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -32,9 +31,6 @@ export default function RootLayout({
           <Sidebar />
           <main className="flex-1 overflow-y-auto">{children}</main>
         </div>
-        <header className="p-3 flex justify-end">
-          <UserMenu />
-        </header>
         {/* Must be mounted for order/hide to apply on the dashboard */}
         <PortfolioLayoutApplier />
       </body>

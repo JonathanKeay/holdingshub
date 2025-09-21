@@ -1,0 +1,18 @@
+# Let Git store text with LF and handle platform conversion automatically
+* text=auto
+
+# Shell / bash scripts should stay LF
+*.sh text eol=lf
+
+# Mark common binary types so Git won't try to diff/CRLF them
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.svg -text
