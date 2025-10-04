@@ -12,7 +12,7 @@ export async function fetchExchangeRatesToGBP(): Promise<Record<string, number>>
     .single();
 
   if (cached?.quotes) {
-    console.log('Using cached FX rates for', today);
+    // debug log removed (using cached FX rates)
     return parseQuotesToGBP(cached.quotes);
   }
 
@@ -35,7 +35,7 @@ export async function fetchExchangeRatesToGBP(): Promise<Record<string, number>>
     quotes,
   });
 
-  console.log('Fetched and cached new FX rates for', today);
+  // debug log removed (fetched and cached new FX rates)
   return parseQuotesToGBP(quotes);
 }
 

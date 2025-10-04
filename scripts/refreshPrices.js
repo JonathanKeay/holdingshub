@@ -21,7 +21,8 @@ async function refreshAllAssetTickers() {
   }
 
   console.log(`🔄 Refreshing ${tickers.length} tickers...`);
-  const prices = await fetchAndCachePrices(tickers);
+  // Pass the service-role client explicitly so upserts use elevated privileges
+  const prices = await fetchAndCachePrices(tickers, undefined, supabase);
   console.log('✅ Done. Prices:', prices);
 }
 
