@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/lib/formatCurrency';
@@ -45,7 +45,7 @@ type NewTx = {
   notes?: string;
 };
 
-export default function TransactionsPage() {
+function TransactionsPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const portfolioFilter = searchParams.get('portfolio');
@@ -881,5 +881,13 @@ export default function TransactionsPage() {
         </div>
       )}
     </section>
+  );
+}
+
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <TransactionsPageInner />
+    </Suspense>
   );
 }

@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Sidebar } from "@/components/Sidebar";
 import PortfolioLayoutApplier from './PortfolioLayoutApplier';
+import { Suspense } from 'react';
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -34,7 +35,9 @@ export default function RootLayout({
           <main className="flex-1 overflow-y-auto">{children}</main>
         </div>
         {/* Must be mounted for order/hide to apply on the dashboard */}
-        <PortfolioLayoutApplier />
+        <Suspense fallback={null}>
+          <PortfolioLayoutApplier />
+        </Suspense>
       </body>
     </html>
   );

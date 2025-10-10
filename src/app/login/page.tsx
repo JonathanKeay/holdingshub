@@ -1,10 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabaseBrowser } from '@/lib/supabase/browser';
 
-export default function LoginPage() {
+function LoginPageInner() {
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -72,5 +72,13 @@ export default function LoginPage() {
         {err && <p className="text-sm text-red-600">{err}</p>}
       </form>
     </main>
+  );
+}
+
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <LoginPageInner />
+    </Suspense>
   );
 }

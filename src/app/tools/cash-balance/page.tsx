@@ -1,6 +1,7 @@
 // app/tools/cash-balance/page.tsx
 import { getSupabaseServerClient } from '@/lib/supabase-server';
 import CashBalanceToolPageClient from './CashBalanceToolPageClient';
+import { Suspense } from 'react';
 
 export default async function CashBalanceToolPage() {
   const supabase = await getSupabaseServerClient();
@@ -23,6 +24,8 @@ export default async function CashBalanceToolPage() {
   }
 
   return (
-    <CashBalanceToolPageClient portfolios={portfolios || []} />
+    <Suspense fallback={null}>
+      <CashBalanceToolPageClient portfolios={portfolios || []} />
+    </Suspense>
   );
 }
