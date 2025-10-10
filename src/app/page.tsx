@@ -24,6 +24,7 @@ import { unstable_cache } from 'next/cache';
 import { redirect } from 'next/navigation';
 import LivePricesRefresher from '@/components/LivePricesRefresher';
 import MarketStatusDots from '@/components/MarketStatusDots';
+import PortfolioExpandCollapseControls from '@/components/PortfolioExpandCollapseControls';
 
 // Cache FX for 60s; cache prices for 30s (keyed by sorted tickers)
 // Add tags so we can optionally invalidate via a webhook/job later.
@@ -146,6 +147,7 @@ export default async function Dashboard() {
       </div>
 
       {/* --- PER-PORTFOLIO TABLES --- */}
+      <PortfolioExpandCollapseControls />
       {portfolios.map(({ portfolio, holdings, cash_balances }) => (
         <PerPortfolioTable
           key={portfolio.id}

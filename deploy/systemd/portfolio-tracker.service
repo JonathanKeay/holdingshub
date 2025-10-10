@@ -1,0 +1,19 @@
+[Unit]
+Description=Portfolio Tracker (Next.js) - standalone
+After=network.target
+
+[Service]
+Type=simple
+Environment=NODE_ENV=production
+Environment=PORT=3000
+# Adjust WorkingDirectory to your checkout path
+WorkingDirectory=/opt/portfolio-tracker
+ExecStart=/usr/bin/npm start --silent
+Restart=always
+RestartSec=5
+# Optional: set user/group you want to run as
+# User=www-data
+# Group=www-data
+
+[Install]
+WantedBy=multi-user.target

@@ -51,22 +51,33 @@ function minutesUntil(a: DateTime, b: DateTime) {
   return Math.max(0, Math.round(a.diff(b, 'minutes').minutes));
 }
 
+function formatHM(totalMinutes: number) {
+  const mins = Math.max(0, Math.round(totalMinutes));
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h <= 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
 function computeNextOpen(m: MarketDef, nowMarket: DateTime): DateTime {
-  // Determine starting day offset
-  const weekday = nowMarket.weekday; // 1..7
-  let dayOffset = 0;
   const isWeekend = (d: number) => d === 6 || d === 7;
-  const marketDateISO = nowMarket.toISODate()!;
-  if (isWeekend(weekday) || isMarketHoliday(m.code, marketDateISO)) dayOffset = 1;
+  let dayOffset = 0;
 
   while (true) {
     const baseDay = nowMarket.startOf('day').plus({ days: dayOffset });
-    const candidateWeekday = baseDay.weekday;
-    const candidateISO = baseDay.toISODate()!;
-    if (!isWeekend(candidateWeekday) && !isMarketHoliday(m.code, candidateISO)) {
+    const wd = baseDay.weekday; // 1..7
+    const iso = baseDay.toISODate()!;
+
+    if (!isWeekend(wd) && !isMarketHoliday(m.code, iso)) {
       const open = baseDay.plus({ hours: m.open.h, minutes: m.open.m });
-      if (dayOffset === 0 && nowMarket < open) return open; // later today
-      if (dayOffset > 0 || nowMarket >= open) return open;  // future day
+      if (dayOffset === 0) {
+        // Only return today's open if it's still in the future
+        if (nowMarket < open) return open;
+        // otherwise look at the next valid trading day
+      } else {
+        return open;
+      }
     }
     dayOffset += 1;
   }
@@ -89,15 +100,15 @@ function phaseFor(m: MarketDef, nowUTC: DateTime): Session {
   if (weekend) return { code: m.code, label: m.label, phase: 'closed', note: 'Weekend', nextOpen: computeNextOpen(m, now) };
 
   if (now < pre) {
-    return { code: m.code, label: m.label, phase: 'closed', note: `Opens in ${minutesUntil(open, now)}m`, nextOpen: open };
+    return { code: m.code, label: m.label, phase: 'closed', note: `Opens in ${formatHM(minutesUntil(open, now))}`, nextOpen: open };
   }
   if (now >= pre && now < open) {
-    return { code: m.code, label: m.label, phase: 'pre', note: `Opens in ${minutesUntil(open, now)}m`, nextOpen: open };
+    return { code: m.code, label: m.label, phase: 'pre', note: `Opens in ${formatHM(minutesUntil(open, now))}`, nextOpen: open };
   }
   if (now >= open && now < close) {
     // Next open is next trading day, not today's close
     const nextOpen = computeNextOpen(m, now.plus({ minutes: 1 }));
-    return { code: m.code, label: m.label, phase: 'open', note: `Closes in ${minutesUntil(close, now)}m`, nextOpen };
+    return { code: m.code, label: m.label, phase: 'open', note: `Closes in ${formatHM(minutesUntil(close, now))}`, nextOpen };
   }
   if (now >= close && now < post) {
     const nextOpen = computeNextOpen(m, now.plus({ minutes: 1 }));
@@ -105,7 +116,7 @@ function phaseFor(m: MarketDef, nowUTC: DateTime): Session {
   }
 
   const nextOpen = computeNextOpen(m, now.plus({ minutes: 1 }));
-  return { code: m.code, label: m.label, phase: 'closed', note: `Opens in ${minutesUntil(nextOpen, now)}m`, nextOpen };
+  return { code: m.code, label: m.label, phase: 'closed', note: `Opens in ${formatHM(minutesUntil(nextOpen, now))}`, nextOpen };
 }
 
 interface Props {

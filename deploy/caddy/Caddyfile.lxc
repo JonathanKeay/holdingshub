@@ -1,0 +1,15 @@
+{
+	# Optional global options
+	# admin off
+}
+
+# Replace with your domain
+portfolio.your-domain.example {
+	encode zstd gzip
+	# If Caddy runs in the same LXC as the app listening on 3000
+	reverse_proxy 127.0.0.1:3000
+	log {
+		output stdout
+		format console
+	}
+}

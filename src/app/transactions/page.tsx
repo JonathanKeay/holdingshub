@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/lib/formatCurrency';
@@ -21,12 +21,28 @@ type TransactionRow = {
   quantity: number;
   price: number;
   fee: number;
-  gbp_value: number;
+  cash_value: number | null;
+  cash_ccy: string | null;
   notes: string;
   ticker: string;
   portfolio_name: string;
   currency: string;
   split_factor?: number | null; // used for SPL only
+};
+
+type PortfolioOption = { id: string; name: string; base_currency?: string };
+
+type NewTx = {
+  portfolio_id: string;
+  ticker: string;
+  type: 'BUY' | 'SELL';
+  date: string; // yyyy-mm-dd
+  quantity: number;
+  price: number;
+  fee: number;
+  cash_value?: number | null;
+  fxrate?: number | null;
+  notes?: string;
 };
 
 export default function TransactionsPage() {
@@ -45,7 +61,24 @@ export default function TransactionsPage() {
   const [filterTicker, setFilterTicker] = useState(searchParams.get('ticker') || '');
   const [filterType, setFilterType] = useState(searchParams.get('type') || '');
 
-  const [tickers, setTickers] = useState<{ id: string; ticker: string }[]>([]);
+  const [tickers, setTickers] = useState<{ id: string; ticker: string; currency: string }[]>([]);
+  const [portfolios, setPortfolios] = useState<PortfolioOption[]>([]);
+
+  // Add form state
+  const [showAdd, setShowAdd] = useState(false);
+  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const [newTx, setNewTx] = useState<NewTx>({
+    portfolio_id: '',
+    ticker: '',
+    type: 'BUY',
+    date: todayStr,
+    quantity: 0,
+    price: 0,
+    fee: 0,
+    cash_value: null,
+    fxrate: null,
+    notes: '',
+  });
 
   function updateQueryParams(key: string, value: string) {
     const params = new URLSearchParams(window.location.search);
@@ -82,11 +115,19 @@ export default function TransactionsPage() {
     async function fetchTickers() {
       const { data, error } = await supabase
         .from('assets')
-        .select('id, ticker')
+        .select('id, ticker, currency')
         .order('ticker', { ascending: true });
-      if (!error && data) setTickers(data);
+      if (!error && data) setTickers(data as { id: string; ticker: string; currency: string }[]);
+    }
+    async function fetchPortfolios() {
+      const { data, error } = await supabase
+        .from('portfolios')
+        .select('id, name, base_currency')
+        .order('name', { ascending: true });
+      if (!error && data) setPortfolios(data as PortfolioOption[]);
     }
     fetchTickers();
+    fetchPortfolios();
   }, []);
 
   function handleSort(column: typeof sortColumn) {
@@ -103,7 +144,7 @@ export default function TransactionsPage() {
     const query = supabase
       .from('transactions')
       .select(`
-        id, date, type, quantity, price, fee, gbp_value, notes, split_factor,
+        id, date, type, quantity, price, fee, cash_value, cash_ccy, notes, split_factor,
         assets ( ticker, currency ),
         portfolios ( name )
       `)
@@ -126,7 +167,8 @@ export default function TransactionsPage() {
       quantity: Number(t.quantity ?? 0),
       price: Number(t.price ?? 0),
       fee: Number(t.fee ?? 0),
-      gbp_value: Number(t.gbp_value ?? 0),
+      cash_value: t.cash_value != null ? Number(t.cash_value) : null,
+      cash_ccy: t.cash_ccy ?? null,
       notes: t.notes ?? '',
       ticker: t.assets?.ticker ?? 'N/A',
       currency: t.assets?.currency ?? 'GBP',
@@ -141,6 +183,23 @@ export default function TransactionsPage() {
   useEffect(() => {
     fetchTransactions();
   }, [portfolioFilter]);
+
+  // Selected asset (for dynamic fee currency display in add form)
+  const selectedAsset = useMemo(
+    () => tickers.find((t) => t.ticker === newTx.ticker) || null,
+    [tickers, newTx.ticker]
+  );
+  // Selected portfolio (for showing base currency label next to cash value)
+  const selectedPortfolio = useMemo(
+    () => portfolios.find((p) => p.id === newTx.portfolio_id) || null,
+    [portfolios, newTx.portfolio_id]
+  );
+
+  // Editing modal selected asset (updates when ticker selection changes)
+  const editingAsset = useMemo(
+    () => tickers.find((t) => t.ticker === (editValues.ticker ?? editingTx?.ticker)) || null,
+    [tickers, editValues.ticker, editingTx?.ticker]
+  );
 
   const filteredTransactions = transactions.filter((tx) => {
     const matchDateFrom = filterDateFrom ? new Date(tx.date) >= new Date(filterDateFrom) : true;
@@ -241,7 +300,7 @@ export default function TransactionsPage() {
         notes: tx.notes,
         type: tx.type,
         split_factor: tx.split_factor ?? undefined,
-        gbp_value: tx.gbp_value,
+        cash_value: tx.cash_value ?? undefined,
       });
     }
   }
@@ -259,12 +318,262 @@ export default function TransactionsPage() {
     }
   };
 
+  async function handleCreate() {
+    // Basic validation
+    if (!newTx.portfolio_id) return alert('Please select a portfolio');
+    if (!newTx.ticker) return alert('Please choose a ticker');
+    if (!newTx.quantity || newTx.quantity <= 0) return alert('Quantity must be > 0');
+    if (newTx.price < 0) return alert('Price cannot be negative');
+    if (newTx.fee < 0) return alert('Fee cannot be negative');
+
+    // Lookup asset_id by ticker
+    const { data: asset, error: assetError } = await supabase
+      .from('assets')
+      .select('id, currency')
+      .eq('ticker', newTx.ticker)
+      .single();
+    if (assetError || !asset) {
+      return alert('Ticker not found in assets table');
+    }
+
+  // Compute settle_value to mirror importer behavior (qty*price + fee) for both BUY/SELL
+  const qty = Number(newTx.quantity);
+  const price = Number(newTx.price);
+  const fee = Number(newTx.fee || 0);
+  const settle = qty * price + fee;
+
+    // Helper to compute cash_value in portfolio base currency using cached FX (if available)
+    async function computeCashLeg(
+      assetCcy: string,
+      portfolioId: string,
+      tradeDate: string,
+      settleAbs: number
+    ): Promise<{ cash_value: number | null; cash_ccy: string | null; cash_fx_to_portfolio: number | null }> {
+      const pf = portfolios.find(p => p.id === portfolioId);
+      const base = (pf?.base_currency || 'GBP').toUpperCase();
+      const asset = (assetCcy || 'GBP').toUpperCase();
+
+      if (!settleAbs || settleAbs <= 0) {
+        return { cash_value: null, cash_ccy: null, cash_fx_to_portfolio: null };
+      }
+
+      if (asset === base) {
+        const val = Math.abs(settleAbs);
+        return { cash_value: val, cash_ccy: base, cash_fx_to_portfolio: 1 };
+      }
+
+      // Try cached FX for the trade date from fx_rates (quotes are like { GBPUSD: 1.29 })
+      const { data: fxRow } = await supabase
+        .from('fx_rates')
+        .select('quotes')
+        .eq('date', tradeDate)
+        .single();
+
+      const quotes = fxRow?.quotes as Record<string, number> | undefined;
+      if (!quotes) return { cash_value: null, cash_ccy: null, cash_fx_to_portfolio: null };
+
+      // Build X->GBP and GBP->Y, then X->Y
+      const gbpToAsset = quotes['GBP' + asset];
+      const gbpToBase = quotes['GBP' + base];
+
+      let rate: number | null = null;
+      if (asset === 'GBP' && typeof gbpToBase === 'number') {
+        rate = gbpToBase; // GBP->Base
+      } else if (base === 'GBP' && typeof gbpToAsset === 'number') {
+        rate = 1 / gbpToAsset; // Asset->GBP
+      } else if (typeof gbpToAsset === 'number' && typeof gbpToBase === 'number') {
+        rate = (1 / gbpToAsset) * gbpToBase; // Asset->GBP->Base
+      }
+
+      if (rate == null || !isFinite(rate) || rate <= 0) {
+        return { cash_value: null, cash_ccy: null, cash_fx_to_portfolio: null };
+      }
+
+      const cashVal = Math.abs(settleAbs * rate);
+      return { cash_value: cashVal, cash_ccy: base, cash_fx_to_portfolio: cashVal / Math.abs(settleAbs) };
+    }
+
+    const payload: any = {
+      portfolio_id: newTx.portfolio_id,
+      asset_id: asset.id,
+      type: newTx.type,
+      // Store date as ISO string with time (set to noon to avoid TZ surprises)
+      date: new Date(newTx.date + 'T12:00:00Z').toISOString(),
+      quantity: Number(newTx.quantity),
+      price: Number(newTx.price),
+      fee: Number(newTx.fee || 0),
+      notes: newTx.notes || null,
+      // Cash leg: allow explicit value like importer, else fallback to qty*price+fee; cc y = portfolio base
+      cash_value: newTx.cash_value != null && newTx.cash_value !== undefined && newTx.cash_value !== ('' as any)
+        ? Number(newTx.cash_value)
+        : (qty * price + fee),
+      cash_ccy: (selectedPortfolio?.base_currency || 'GBP'),
+      cash_fx_to_portfolio: newTx.fxrate != null ? Number(newTx.fxrate) : null,
+      // Set settle leg in asset currency and include fee to reflect total cost/proceeds in asset ccy
+      settle_value: Math.abs(settle),
+      settle_ccy: asset.currency || null,
+    };
+
+    const { error } = await supabase.from('transactions').insert([payload]);
+    if (error) {
+      console.error('Create failed:', error);
+      return alert('Failed to create transaction: ' + error.message);
+    }
+
+    // Reset + refresh list
+  setNewTx({ ...newTx, quantity: 0, price: 0, fee: 0, cash_value: null, fxrate: null, notes: '' });
+    setShowAdd(false);
+    await fetchTransactions();
+  }
+
   return (
     <section className="p-4 max-w-6xl mx-auto">
       <div className="sticky top-0 z-20 bg-white pb-2">
         <h2 className="text-xl font-semibold mb-4">
           {portfolioFilter ? 'Transactions for Portfolio' : 'All Transactions'}
         </h2>
+
+        {/* Add BUY/SELL inline form */}
+        <div className="mb-3">
+          <button
+            type="button"
+            className="rounded bg-black text-white px-3 py-1 text-sm"
+            onClick={() => setShowAdd(s => !s)}
+          >
+            {showAdd ? 'Cancel' : 'Add BUY/SELL'}
+          </button>
+          {showAdd && (
+            <div className="mt-3 border rounded p-3 bg-gray-50">
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="text-sm">
+                  <span className="block text-gray-600">Portfolio</span>
+                  <select
+                    className="border rounded px-2 py-1 text-sm min-w-[160px]"
+                    value={newTx.portfolio_id}
+                    onChange={(e) => setNewTx(v => ({ ...v, portfolio_id: e.target.value }))}
+                  >
+                    <option value="">Select…</option>
+                    {portfolios.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="text-sm">
+                  <span className="block text-gray-600">Ticker</span>
+                  <input
+                    list="tickers-list"
+                    className="border rounded px-2 py-1 text-sm min-w-[120px]"
+                    value={newTx.ticker}
+                    onChange={(e) => setNewTx(v => ({ ...v, ticker: e.target.value.toUpperCase().trim() }))}
+                    placeholder="e.g. AAPL or VUSA.L"
+                  />
+                  <datalist id="tickers-list">
+                    {tickers.map(t => (
+                      <option key={t.id} value={t.ticker} />
+                    ))}
+                  </datalist>
+                </label>
+
+                <label className="text-sm">
+                  <span className="block text-gray-600">Type</span>
+                  <select
+                    className="border rounded px-2 py-1 text-sm"
+                    value={newTx.type}
+                    onChange={(e) => setNewTx(v => ({ ...v, type: (e.target.value as 'BUY'|'SELL') }))}
+                  >
+                    <option value="BUY">BUY</option>
+                    <option value="SELL">SELL</option>
+                  </select>
+                </label>
+
+                <label className="text-sm">
+                  <span className="block text-gray-600">Date</span>
+                  <input
+                    type="date"
+                    className="border rounded px-2 py-1 text-sm"
+                    value={newTx.date}
+                    onChange={(e) => setNewTx(v => ({ ...v, date: e.target.value }))}
+                  />
+                </label>
+
+                <label className="text-sm">
+                  <span className="block text-gray-600">Quantity</span>
+                  <input
+                    type="number"
+                    step="any"
+                    className="border rounded px-2 py-1 text-sm w-28 text-right"
+                    value={newTx.quantity}
+                    onChange={(e) => setNewTx(v => ({ ...v, quantity: Number(e.target.value) }))}
+                  />
+                </label>
+
+                <label className="text-sm">
+                  <span className="block text-gray-600">Price</span>
+                  <input
+                    type="number"
+                    step="any"
+                    className="border rounded px-2 py-1 text-sm w-28 text-right"
+                    value={newTx.price}
+                    onChange={(e) => setNewTx(v => ({ ...v, price: Number(e.target.value) }))}
+                  />
+                </label>
+
+                <label className="text-sm">
+                  <span className="block text-gray-600">Fee ({selectedAsset?.currency || '—'})</span>
+                  <input
+                    type="number"
+                    step="any"
+                    className="border rounded px-2 py-1 text-sm w-24 text-right"
+                    value={newTx.fee}
+                    onChange={(e) => setNewTx(v => ({ ...v, fee: Number(e.target.value) }))}
+                  />
+                </label>
+
+                <label className="text-sm">
+                  <span className="block text-gray-600">Cash Value ({selectedPortfolio?.base_currency || 'GBP'})</span>
+                  <input
+                    type="number"
+                    step="any"
+                    className="border rounded px-2 py-1 text-sm w-32 text-right"
+                    value={newTx.cash_value ?? ''}
+                    onChange={(e) => setNewTx(v => ({ ...v, cash_value: e.target.value === '' ? null : Number(e.target.value) }))}
+                  />
+                </label>
+
+                <label className="text-sm">
+                  <span className="block text-gray-600">FX Rate (cash_fx_to_portfolio)</span>
+                  <input
+                    type="number"
+                    step="any"
+                    className="border rounded px-2 py-1 text-sm w-28 text-right"
+                    value={newTx.fxrate ?? ''}
+                    onChange={(e) => setNewTx(v => ({ ...v, fxrate: e.target.value === '' ? null : Number(e.target.value) }))}
+                  />
+                </label>
+
+                <label className="flex-1 text-sm min-w-[200px]">
+                  <span className="block text-gray-600">Notes</span>
+                  <input
+                    type="text"
+                    className="border rounded px-2 py-1 text-sm w-full"
+                    value={newTx.notes}
+                    onChange={(e) => setNewTx(v => ({ ...v, notes: e.target.value }))}
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  className="rounded bg-blue-600 text-white px-3 py-1 text-sm h-8"
+                  onClick={handleCreate}
+                  title="Create transaction"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
         <div className="flex flex-wrap items-center gap-2 mb-2">
           <input
@@ -358,7 +667,7 @@ export default function TransactionsPage() {
               <th className="p-2 text-right">Qty</th>
               <th className="p-2 text-right">Price</th>
               <th className="p-2 text-right">Fee</th>
-              <th className="p-2 text-right">GBP Value</th>
+              <th className="p-2 text-right">Cash Value</th>
               <th className="p-2 min-w-[160px]">Notes</th>
               <th className="p-2">Edit</th>
             </tr>
@@ -381,11 +690,11 @@ export default function TransactionsPage() {
                   {tx.type === 'SPL' ? '—' : formatCurrency(tx.price, tx.currency)}
                 </td>
                 <td className="p-2 text-right">
-                  {tx.type === 'SPL' ? '—' : formatCurrency(tx.fee, 'GBP')}
+                  {tx.type === 'SPL' ? '—' : formatCurrency(tx.fee, tx.currency)}
                 </td>
 
                 <td className="p-2 text-right">
-                  {formatCurrency(tx.gbp_value, 'GBP')}
+                  {tx.cash_value != null ? formatCurrency(tx.cash_value, (tx.cash_ccy || 'GBP')) : '—'}
                 </td>
                 <td className="p-2 min-w-[160px]">{tx.notes}</td>
                 <td className="p-2">
@@ -512,7 +821,7 @@ export default function TransactionsPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm">Fee</label>
+                    <label className="block text-sm">Fee ({editingAsset?.currency || editingTx?.currency || ''})</label>
                     <input
                       type="number"
                       value={editValues.fee ?? ''}
@@ -526,18 +835,19 @@ export default function TransactionsPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm">GBP Value</label>
+                    <label className="block text-sm">Cash Value</label>
                     <input
                       type="number"
-                      value={editValues.gbp_value ?? ''}
+                      value={editValues.cash_value ?? ''}
                       onChange={(e) =>
                         setEditValues({
                           ...editValues,
-                          gbp_value: e.target.value === '' ? undefined : parseFloat(e.target.value),
+                          cash_value: e.target.value === '' ? undefined : parseFloat(e.target.value),
                         })
                       }
                       className="border px-2 py-1 w-full rounded"
                     />
+                    <p className="text-xs text-gray-500 mt-1">Currency: set in row via cash_ccy field (optional)</p>
                   </div>
                 </>
               )}

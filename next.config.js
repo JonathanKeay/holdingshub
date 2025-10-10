@@ -5,6 +5,9 @@ const nextConfig = {
     // leave empty → ensures Webpack is used
   },
 
+  // Use standalone output so Docker images can run with minimal files
+  output: 'standalone',
+
   webpack(config) {
     // Exclude .svg from Next.js default image loader
     config.module.rules
