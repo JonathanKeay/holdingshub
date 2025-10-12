@@ -16,10 +16,14 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Portfolio Dashboard",
+  title: "HoldingsHub",
   description: "Multi-portfolio tracker with live prices, FX conversion and per-portfolio breakdown.",
   icons: { icon: "/favicon.ico" },
-  metadataBase: new URL(process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'),
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_APP_ORIGIN ||
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    'http://localhost:3000'
+  ),
 };
 
 export default function RootLayout({

@@ -2,6 +2,13 @@
 // Ensure environment variables are loaded BEFORE we import any module that reads them.
 import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
+// Safety guard: avoid accidental prod runs unless explicitly intended
+const envName = process.env.ENVIRONMENT || process.env.NODE_ENV || 'development';
+if ((process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '').includes('supabase.co') && envName !== 'production') {
+  console.warn('⚠️ Safety: ENVIRONMENT is not production. Refusing to run against', process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL);
+  console.warn('   Set ENVIRONMENT=production explicitly to proceed.');
+  process.exit(1);
+}
 
 // Resolve environment variables (support both public & fallback names)
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;

@@ -1,6 +1,6 @@
-# Deploying Portfolio Tracker on Proxmox (Docker + Caddy)
+# Deploying HoldingsHub on Proxmox (Docker + Caddy)
 
-This guide gets your app reachable from mobile and desktop via a domain with HTTPS, running on a Proxmox VM using Docker.
+This guide gets HoldingsHub reachable from mobile and desktop via a domain with HTTPS, running on a Proxmox VM using Docker.
 
 ## Prereqs
 - Proxmox VM (Ubuntu/Debian recommended) with Docker and Docker Compose V2 installed

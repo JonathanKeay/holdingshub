@@ -1,0 +1,19 @@
+[Unit]
+Description=HoldingsHub - Production (Next.js)
+After=network.target
+
+[Service]
+Type=simple
+Environment=NODE_ENV=production
+Environment=PORT=3000
+EnvironmentFile=/opt/holdingshub-prod/holdingshub-prod.env
+# Adjust path to your prod checkout
+WorkingDirectory=/opt/holdingshub-prod
+ExecStart=/usr/bin/npm start --silent
+Restart=always
+RestartSec=5
+# User=www-data
+# Group=www-data
+
+[Install]
+WantedBy=multi-user.target

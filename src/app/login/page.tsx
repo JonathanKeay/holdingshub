@@ -6,7 +6,7 @@ import { supabaseBrowser } from '@/lib/supabase/browser';
 
 function LoginPageInner() {
   const [email, setEmail] = useState('');
-  const [sent, setSent] = useState(false);
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const searchParams = useSearchParams();
@@ -19,29 +19,18 @@ function LoginPageInner() {
     setLoading(true);
     setErr(null);
     try {
-      const origin =
-        typeof window !== 'undefined' ? window.location.origin : '';
-      const emailRedirectTo = `${origin}/auth/callback?returnTo=${encodeURIComponent(returnTo)}`;
-      const { error } = await supabaseBrowser.auth.signInWithOtp({
+      const { data, error } = await supabaseBrowser.auth.signInWithPassword({
         email,
-        options: { emailRedirectTo },
+        password,
       });
       if (error) throw error;
-      setSent(true);
+      // On success, send them to their intended page
+      window.location.href = returnTo || '/';
     } catch (e: any) {
       setErr(e?.message ?? 'Something went wrong');
     } finally {
       setLoading(false);
     }
-  }
-
-  if (sent) {
-    return (
-      <main className="mx-auto max-w-sm p-6">
-        <h1 className="text-xl font-semibold mb-3">Check your email</h1>
-        <p>We’ve sent you a sign-in link. After clicking it you will be redirected to <code>{returnTo}</code>.</p>
-      </main>
-    );
   }
 
   return (
@@ -62,12 +51,23 @@ function LoginPageInner() {
             placeholder="you@example.com"
           />
         </label>
+        <label className="block">
+          <span className="text-sm">Password</span>
+          <input
+            type="password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="mt-1 w-full rounded border px-3 py-2"
+            placeholder="••••••••"
+          />
+        </label>
         <button
           type="submit"
           disabled={loading}
           className="w-full rounded bg-black text-white py-2"
         >
-          {loading ? 'Sending…' : 'Send magic link'}
+          {loading ? 'Signing in…' : 'Sign in'}
         </button>
         {err && <p className="text-sm text-red-600">{err}</p>}
       </form>

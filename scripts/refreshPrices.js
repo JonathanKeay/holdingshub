@@ -2,6 +2,14 @@ import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
 import { fetchAndCachePrices } from '../src/lib/prices.js';
 
+// Safety guard: prevent accidental prod writes from a dev shell
+const envName = process.env.ENVIRONMENT || process.env.NODE_ENV || 'development';
+if (process.env.NEXT_PUBLIC_SUPABASE_URL?.includes('supabase.co') && envName !== 'production') {
+  console.warn('⚠️ Safety: ENVIRONMENT is not production. Refusing to run against', process.env.NEXT_PUBLIC_SUPABASE_URL);
+  console.warn('   Set ENVIRONMENT=production explicitly to proceed.');
+  process.exit(1);
+}
+
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY

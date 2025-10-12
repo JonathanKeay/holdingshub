@@ -97,7 +97,7 @@ export default async function Dashboard() {
 
   return (
     <main className="p-6 max-w-6xl mx-auto">
-      <h1 className="text-2xl font-bold mb-6">Portfolio Dashboard</h1>
+  <h1 className="text-2xl font-bold mb-6">HoldingsHub</h1>
 
       {/* --- TOTAL HOLDINGS TABLE (All Portfolios) --- */}
       <div className="mb-10">

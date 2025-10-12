@@ -1,0 +1,15 @@
+{
+	# global options (optional)
+}
+
+# Production site (port 3000 app)
+holdingshub.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:3000
+}
+
+# Development site (port 4000 dev server)
+dev.holdingshub.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:4000
+}

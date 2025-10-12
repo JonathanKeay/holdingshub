@@ -1,0 +1,20 @@
+[Unit]
+Description=HoldingsHub - Development (Next.js)
+After=network.target
+
+[Service]
+Type=simple
+Environment=NODE_ENV=development
+Environment=PORT=4000
+EnvironmentFile=/opt/holdingshub-dev/holdingshub-dev.env
+# Adjust path to your dev checkout
+WorkingDirectory=/opt/holdingshub-dev
+# Run dev server with hot reload; ensure dev env file exists in this path
+ExecStart=/usr/bin/npm run dev --silent
+Restart=always
+RestartSec=5
+# User=www-data
+# Group=www-data
+
+[Install]
+WantedBy=multi-user.target

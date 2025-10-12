@@ -64,8 +64,14 @@ export function Sidebar() {
 	};
 
 	return (
-		<aside className="h-screen w-16 bg-themeblue text-white flex flex-col pt-4 px-2 pb-6">
-			<div className="space-y-6">
+			<aside className="h-screen w-16 bg-themeblue text-white flex flex-col pt-4 px-2 pb-6">
+				<div className="space-y-6">
+					{/* App mark */}
+					<div className="flex items-center justify-center mb-2">
+						<Link href="/" aria-label="HoldingsHub">
+							<img src="/holdingshub-mark.svg" alt="HoldingsHub" width={24} height={24} />
+						</Link>
+					</div>
 				{topNavItems.map((item) => (
 					<LinkItem key={item.label} {...item} />
 				))}

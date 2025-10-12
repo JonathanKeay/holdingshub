@@ -210,7 +210,14 @@ export async function POST(req: NextRequest) {
     const portfoliosByNormalized = Object.fromEntries(
       (portfolios ?? []).map((p) => [
         normalizeNameForLookup(p.name),
-        { id: p.id, name: p.name, currency: (p as any).base_currency ?? null },
+        {
+          id: p.id,
+          name: p.name,
+          // Preserve original field for type compatibility
+          base_currency: (p as any).base_currency ?? null,
+          // Also expose as `currency` for downstream convenience
+          currency: (p as any).base_currency ?? null,
+        },
       ])
     );
     const availablePortfolios = (portfolios ?? []).map((p) => ({

@@ -128,7 +128,7 @@ export default async function Dashboard() {
 
   return (
     <main className="p-6 max-w-6xl mx-auto">
-  <h1 className="text-2xl font-bold mb-2">Portfolio Dashboard</h1>
+  <h1 className="text-2xl font-bold mb-2">HoldingsHub</h1>
       <div className="mb-2">
         <MarketStatusDots tickers={allTickersSorted} />
       </div>
