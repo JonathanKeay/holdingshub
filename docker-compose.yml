@@ -1,8 +1,8 @@
-version: "3.9"
 
 services:
   app:
-    image: portfolio-tracker:latest
+    container_name: holdingshub-app-prod
+    image: holdingshub:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -13,13 +13,20 @@ services:
     env_file:
       - .env.docker
     environment:
-      - NEXT_PUBLIC_APP_ORIGIN=${PUBLIC_URL}
+      - NEXT_PUBLIC_APP_ORIGIN=${PUBLIC_URL}  # runtime, but note: NEXT_PUBLIC_* is baked at build for client bundle
       - PORT=3000
     restart: unless-stopped
     networks:
       - web
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
 
   caddy:
+    container_name: holdingshub-caddy
     image: caddy:2-alpine
     restart: unless-stopped
     ports:

@@ -1,16 +1,9 @@
-{
-	# Optional: enable telemetry off and admin off if preferred
-	# admin off
+:80 {
+  reverse_proxy app:3000
 }
 
-# Environment: set SITE_DOMAIN in .env.docker
-{$SITE_DOMAIN} {
-	encode zstd gzip
-	# Forward all traffic to the app service
-	reverse_proxy app:3000
-	# Optional: enable logging
-	log {
-		output stdout
-		format console
-	}
-}
+# or with a LAN domain
+#${SITE_DOMAIN} {
+#  reverse_proxy app:3000
+#  tls internal
+#}

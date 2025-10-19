@@ -11,6 +11,7 @@ yarn.lock
 
 # Env / secrets
 .env*
+.env.*
 !.env.example
 
 # Logs & caches
@@ -40,3 +41,4 @@ Thumbs.db
 supabase/.temp/
 supabase/.branches/
 
+.env

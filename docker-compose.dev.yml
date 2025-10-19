@@ -1,0 +1,24 @@
+
+# docker-compose.dev.yml
+services:
+  app:
+    container_name: holdingshub-app-dev
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -lc '[ -d node_modules ] || npm ci; npm run dev'
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+    volumes:
+      - /opt/holdingshub:/app              # <— absolute path since you're on the server
+      - node_modules:/app/node_modules
+    ports:
+      - "3000:3000"                         # optional (Caddy can still proxy internally)
+    healthcheck:
+      test: ["CMD-SHELL", "echo dev mode, skipping healthcheck && exit 0"]
+      interval: 30s
+      timeout: 3s
+      retries: 1
+      start_period: 5s
+volumes:
+  node_modules:

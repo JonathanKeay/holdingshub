@@ -1,0 +1,160 @@
+[1mdiff --git a/.gitignore b/.gitignore[m
+[1mindex 1833ca3..5f62146 100644[m
+[1m--- a/.gitignore[m
+[1m+++ b/.gitignore[m
+[36m@@ -11,6 +11,7 @@[m [myarn.lock[m
+ [m
+ # Env / secrets[m
+ .env*[m
+[32m+[m[32m.env.*[m
+ !.env.example[m
+ [m
+ # Logs & caches[m
+[36m@@ -40,3 +41,4 @@[m [mThumbs.db[m
+ supabase/.temp/[m
+ supabase/.branches/[m
+ [m
+[32m+[m[32m.env[m
+[1mdiff --git a/Caddyfile b/Caddyfile[m
+[1mindex 01e515a..c717d30 100644[m
+[1m--- a/Caddyfile[m
+[1m+++ b/Caddyfile[m
+[36m@@ -1,16 +1,9 @@[m
+[31m-{[m
+[31m-	# Optional: enable telemetry off and admin off if preferred[m
+[31m-	# admin off[m
+[32m+[m[32m:80 {[m
+[32m+[m[32m  reverse_proxy app:3000[m
+ }[m
+ [m
+[31m-# Environment: set SITE_DOMAIN in .env.docker[m
+[31m-{$SITE_DOMAIN} {[m
+[31m-	encode zstd gzip[m
+[31m-	# Forward all traffic to the app service[m
+[31m-	reverse_proxy app:3000[m
+[31m-	# Optional: enable logging[m
+[31m-	log {[m
+[31m-		output stdout[m
+[31m-		format console[m
+[31m-	}[m
+[31m-}[m
+[32m+[m[32m# or with a LAN domain[m
+[32m+[m[32m#${SITE_DOMAIN} {[m
+[32m+[m[32m#  reverse_proxy app:3000[m
+[32m+[m[32m#  tls internal[m
+[32m+[m[32m#}[m
+[1mdiff --git a/docker-compose.yml b/docker-compose.yml[m
+[1mindex e80d8d9..3a16674 100644[m
+[1m--- a/docker-compose.yml[m
+[1m+++ b/docker-compose.yml[m
+[36m@@ -1,8 +1,8 @@[m
+[31m-version: "3.9"[m
+ [m
+ services:[m
+   app:[m
+[31m-    image: portfolio-tracker:latest[m
+[32m+[m[32m    container_name: holdingshub-app-prod[m
+[32m+[m[32m    image: holdingshub:latest[m
+     build:[m
+       context: .[m
+       dockerfile: Dockerfile[m
+[36m@@ -13,13 +13,20 @@[m [mservices:[m
+     env_file:[m
+       - .env.docker[m
+     environment:[m
+[31m-      - NEXT_PUBLIC_APP_ORIGIN=${PUBLIC_URL}[m
+[32m+[m[32m      - NEXT_PUBLIC_APP_ORIGIN=${PUBLIC_URL}  # runtime, but note: NEXT_PUBLIC_* is baked at build for client bundle[m
+       - PORT=3000[m
+     restart: unless-stopped[m
+     networks:[m
+       - web[m
+[32m+[m[32m    healthcheck:[m
+[32m+[m[32m      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health || exit 1"][m
+[32m+[m[32m      interval: 30s[m
+[32m+[m[32m      timeout: 5s[m
+[32m+[m[32m      retries: 5[m
+[32m+[m[32m      start_period: 40s[m
+ [m
+   caddy:[m
+[32m+[m[32m    container_name: holdingshub-caddy[m
+     image: caddy:2-alpine[m
+     restart: unless-stopped[m
+     ports:[m
+[1mdiff --git a/next.config.ts b/next.config.ts[m
+[1mindex ed51e0c..3246daa 100644[m
+[1m--- a/next.config.ts[m
+[1m+++ b/next.config.ts[m
+[36m@@ -1,25 +1,40 @@[m
+ import type { NextConfig } from "next";[m
+ [m
+[32m+[m[32mconst isDev = process.env.NODE_ENV !== "production";[m
+[32m+[m
+[32m+[m[32m// Build an 'experimental' object only in dev.[m
+[32m+[m[32m// We keep it untyped so tsc doesn't fail on prod builds.[m
+[32m+[m[32mconst experimental: any = {};[m
+[32m+[m[32mif (isDev) {[m
+[32m+[m[32m  // Add every origin you use to access dev (IP and/or LAN domain)[m
+[32m+[m[32m  experimental.allowedDevOrigins = [[m
+[32m+[m[32m    "http://192.168.50.227",[m
+[32m+[m[32m    "https://holdingshub.lan.yourdomain",[m
+[32m+[m[32m  ];[m
+[32m+[m[32m}[m
+[32m+[m
+ const nextConfig: NextConfig = {[m
+   // Avoid Next 15 turbopack warnings; keep using webpack[m
+   turbopack: {},[m
+   // Standalone output for smaller Docker runtime[m
+[31m-  output: 'standalone',[m
+[32m+[m[32m  output: "standalone",[m
+   eslint: {[m
+[31m-    // Don't fail production builds on ESLint errors[m
+     ignoreDuringBuilds: true,[m
+   },[m
+[32m+[m[32m  // only present in dev; empty in prod (so 'next build' won't error)[m
+[32m+[m[32m  experimental,[m
+[32m+[m
+   webpack(config) {[m
+     // Exclude .svg from Next.js default image loader[m
+     config.module.rules[m
+[31m-      .filter((rule: any) => rule.test?.test?.('.svg'))[m
+[32m+[m[32m      .filter((rule: any) => rule.test?.test?.(".svg"))[m
+       .forEach((rule: any) => (rule.exclude = /\.svg$/i));[m
+ [m
+     // Add SVGR loader so .svg imports become React components[m
+     config.module.rules.push({[m
+       test: /\.svg$/i,[m
+       issuer: /\.[jt]sx?$/,[m
+[31m-      use: ['@svgr/webpack'],[m
+[32m+[m[32m      use: ["@svgr/webpack"],[m
+     });[m
+     return config;[m
+   },[m
+[1mdiff --git a/package.json b/package.json[m
+[1mindex 28fbbfa..69fa89e 100644[m
+[1m--- a/package.json[m
+[1m+++ b/package.json[m
+[36m@@ -3,9 +3,9 @@[m
+   "version": "0.1.0",[m
+   "private": true,[m
+   "scripts": {[m
+[31m-    "dev": "next dev",[m
+[32m+[m[32m    "dev": "next dev -H 0.0.0.0 -p 3000",[m
+     "build": "next build",[m
+[31m-    "start": "next start",[m
+[32m+[m[32m    "start": "next start -p 3000",[m
+     "lint": "next lint",[m
+   "refresh:prices": "node scripts/refreshPrices.js",[m
+   "audit:prices": "tsx scripts/auditPrices.ts"[m
+[1mdiff --git a/src/app/page.tsx b/src/app/page.tsx[m
+[1mindex d0f39a8..8abda60 100644[m
+[1m--- a/src/app/page.tsx[m
+[1m+++ b/src/app/page.tsx[m
+[36m@@ -128,7 +128,7 @@[m [mexport default async function Dashboard() {[m
+ [m
+   return ([m
+     <main className="p-6 max-w-6xl mx-auto">[m
+[31m-  <h1 className="text-2xl font-bold mb-2">HoldingsHub</h1>[m
+[32m+[m[32m  <h1 className="text-2xl font-bold mb-2">HoldingsHub(Dev)</h1>[m
+       <div className="mb-2">[m
+         <MarketStatusDots tickers={allTickersSorted} />[m
+       </div>[m
