@@ -1,18 +1,5 @@
 import type { NextConfig } from "next";
 
-const isDev = process.env.NODE_ENV !== "production";
-
-// Build an 'experimental' object only in dev.
-// We keep it untyped so tsc doesn't fail on prod builds.
-const experimental: any = {};
-if (isDev) {
-  // Add every origin you use to access dev (IP and/or LAN domain)
-  experimental.allowedDevOrigins = [
-    "http://192.168.50.227",
-    "https://holdingshub.lan.yourdomain",
-  ];
-}
-
 const nextConfig: NextConfig = {
   // Avoid Next 15 turbopack warnings; keep using webpack
   turbopack: {},
@@ -21,8 +8,7 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
-  // only present in dev; empty in prod (so 'next build' won't error)
-  experimental,
+  // Note: experimental options removed to avoid Next config warnings
 
   webpack(config) {
     // Exclude .svg from Next.js default image loader

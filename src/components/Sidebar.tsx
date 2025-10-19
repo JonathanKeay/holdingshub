@@ -2,13 +2,16 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Home, Upload, Settings, Pencil, Wallet, LogOut } from 'lucide-react';
+import { Upload, Settings, Pencil, Wallet, LogOut, Monitor, Smartphone } from 'lucide-react';
 import clsx from 'clsx';
 import { useMemo } from 'react';
+import type { ComponentType, FC } from 'react';
+import Image from 'next/image';
 import { createBrowserClient } from '@supabase/ssr';
 
 const topNavItems = [
-	{ label: 'Dashboard', icon: Home, href: '/' },
+	{ label: 'Desktop', icon: Monitor, href: '/' },
+	{ label: 'Mobile', icon: Smartphone, href: '/mobile' },
 	{ label: 'Import', icon: Upload, href: '/import' },
 	{ label: 'Edit Assets', icon: Pencil, href: '/assets/edit' },
 ];
@@ -20,6 +23,12 @@ const toolsNavItems = [
 const bottomNavItems = [
 	{ label: 'Settings', icon: Settings, href: '/settings' },
 ];
+
+type NavItem = {
+	label: string;
+	icon: ComponentType<{ className?: string }>;
+	href: string;
+};
 
 export function Sidebar() {
 	const pathname = usePathname();
@@ -33,14 +42,10 @@ export function Sidebar() {
 		[]
 	);
 
-	const LinkItem = ({
+	const LinkItem: FC<NavItem> = ({
 		label,
 		icon: Icon,
 		href,
-	}: {
-		label: string;
-		icon: any;
-		href: string;
 	}) => (
 		<Link
 			href={href}
@@ -69,7 +74,7 @@ export function Sidebar() {
 					{/* App mark */}
 					<div className="flex items-center justify-center mb-2">
 						<Link href="/" aria-label="HoldingsHub">
-							<img src="/holdingshub-mark.svg" alt="HoldingsHub" width={24} height={24} />
+							<Image src="/holdingshub-mark.svg" alt="HoldingsHub" width={24} height={24} />
 						</Link>
 					</div>
 				{topNavItems.map((item) => (
