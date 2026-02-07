@@ -3,7 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -H 0.0.0.0 -p 3000",
+    "dev": "next dev -H 0.0.0.0 -p ${PORT:-3000}",
+    "prices:stream": "tsx scripts/price-streamer.ts",
+    "finnhub:quote": "tsx scripts/finnhub-quote.ts",
+    "finnhub:tap": "tsx scripts/finnhub-tap.ts",
+    "db:test-lock": "tsx scripts/test-lock.ts",
+  "prices:upsert:quote": "tsx scripts/upsert-price-from-finnhub.ts",
+  "prices:upsert:yahoo": "tsx scripts/upsert-price-from-yahoo.ts",
     "build": "next build",
     "start": "next start -p 3000",
     "lint": "next lint",
@@ -24,6 +30,7 @@
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "yahoo-finance2": "^2.13.3",
+    "ws": "^8.18.0",
     "zod": "^4.0.5"
   },
   "devDependencies": {
@@ -38,6 +45,7 @@
     "tailwindcss": "^4.1.12",
     "ts-node": "^10.9.2",
     "tsx": "^4.20.3",
+    "@types/ws": "^8.5.10",
     "typescript": "^5.8.3"
   },
   "type": "module"

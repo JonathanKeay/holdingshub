@@ -8,16 +8,24 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
+  images: {
+    remotePatterns: [
+      { protocol: 'https', hostname: 'logo.clearbit.com' },
+    ],
+  },
   // Note: experimental options removed to avoid Next config warnings
 
   webpack(config) {
     // Exclude .svg from Next.js default image loader
-    config.module.rules
-      .filter((rule: any) => rule.test?.test?.(".svg"))
-      .forEach((rule: any) => (rule.exclude = /\.svg$/i));
+    (config.module.rules as Array<unknown>)
+      .filter((rule): rule is { test?: RegExp; exclude?: RegExp } => {
+        const r = rule as { test?: RegExp };
+        return !!r?.test?.test?.('.svg');
+      })
+      .forEach((rule) => { (rule as { exclude?: RegExp }).exclude = /\.svg$/i; });
 
     // Add SVGR loader so .svg imports become React components
-    config.module.rules.push({
+    (config.module.rules as Array<unknown>).push({
       test: /\.svg$/i,
       issuer: /\.[jt]sx?$/,
       use: ["@svgr/webpack"],

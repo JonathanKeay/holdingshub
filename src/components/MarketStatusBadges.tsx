@@ -111,7 +111,7 @@ function computeSession(m: MarketDef, nowUtc: DateTime): SessionStatus {
 
   // After extended close: next open (skip weekend)
   let nextOpen = openDT.plus({ days: 1 });
-  let nextWeekday = weekday + 1;
+  const nextWeekday = weekday + 1;
   if (nextWeekday === 6) nextOpen = nextOpen.plus({ days: 2 });
   else if (nextWeekday === 7) nextOpen = nextOpen.plus({ days: 1 });
   const mins = Math.round(nextOpen.diff(now, 'minutes').minutes);
@@ -143,6 +143,13 @@ export default function MarketStatusBadges({ refreshMs = 60_000, tickers }: Mark
   });
 
   const [sessions, setSessions] = useState<SessionStatus[]>(() => activeMarkets.map(m => computeSession(m, DateTime.utc())));
+  const [finnhub, setFinnhub] = useState<{
+    recentError: boolean;
+    rateLimited: boolean;
+    lastErrorCode: number | null;
+    missingKey?: boolean;
+    dataUnavailable?: boolean;
+  } | null>(null);
 
   useEffect(() => {
     const update = () => setSessions(activeMarkets.map(m => computeSession(m, DateTime.utc())));
@@ -150,6 +157,27 @@ export default function MarketStatusBadges({ refreshMs = 60_000, tickers }: Mark
     const id = setInterval(update, refreshMs);
     return () => clearInterval(id);
   }, [refreshMs, activeMarkets]);
+
+  useEffect(() => {
+    let stop = false;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/providers/status', { cache: 'no-store' });
+        if (!res.ok) return;
+        const j = await res.json();
+        if (!stop) setFinnhub({
+          recentError: !!j?.finnhub?.recentError,
+          rateLimited: !!j?.finnhub?.rateLimited,
+          lastErrorCode: j?.finnhub?.lastErrorCode ?? null,
+          missingKey: !!j?.finnhub?.missingKey,
+          dataUnavailable: !!j?.finnhub?.dataUnavailable,
+        });
+      } catch {}
+    };
+    load();
+    const id = setInterval(load, Math.max(30_000, refreshMs));
+    return () => { stop = true; clearInterval(id); };
+  }, [refreshMs]);
 
   const toggleHidden = () => {
     setHidden(h => {
@@ -197,6 +225,32 @@ export default function MarketStatusBadges({ refreshMs = 60_000, tickers }: Mark
             </span>
           );
         })}
+        {!hidden && (
+          <span
+            className={`text-xs whitespace-nowrap inline-block rounded px-1 font-bold ${finnhub?.missingKey
+              ? 'bg-red-100 text-red-700'
+              : finnhub?.recentError
+              ? (finnhub?.rateLimited ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700')
+              : 'bg-green-100 text-green-700'}`}
+            title={
+              finnhub?.missingKey
+                ? 'Finnhub API key missing on server'
+                : finnhub?.recentError
+                ? (finnhub?.rateLimited
+                  ? 'Finnhub error: HTTP 429 (rate limited) in last 15m'
+                  : finnhub?.dataUnavailable
+                  ? 'Finnhub returned no usable data recently'
+                  : `Finnhub error code: ${finnhub?.lastErrorCode ?? 'unknown'} in last 15m`)
+                : 'Finnhub OK'
+            }
+          >
+            Finnhub: {finnhub?.missingKey
+              ? 'No key'
+              : finnhub?.recentError
+              ? (finnhub?.rateLimited ? 'Rate-limited' : finnhub?.dataUnavailable ? 'No data' : 'Error')
+              : 'OK'}
+          </span>
+        )}
       </div>
     </div>
   );

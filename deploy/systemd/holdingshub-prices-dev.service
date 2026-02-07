@@ -1,16 +1,13 @@
 [Unit]
-Description=HoldingsHub - Development (Next.js)
+Description=HoldingsHub - Price Streamer (Development)
 After=network.target
 
 [Service]
 Type=simple
 Environment=NODE_ENV=development
-Environment=PORT=4000
 EnvironmentFile=/opt/holdingshub/holdingshub-dev.env
-# Run from this repository checkout
 WorkingDirectory=/opt/holdingshub
-# Run dev server with hot reload; PORT is respected via package.json
-ExecStart=/usr/bin/npm run dev --silent
+ExecStart=/usr/bin/npm run prices:stream --silent
 Restart=always
 RestartSec=5
 # User=www-data

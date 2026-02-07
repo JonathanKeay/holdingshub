@@ -1,38 +1,40 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import { getSupabaseServerClient } from '@/lib/supabase-server';
+import { getPricesVersion } from '@/lib/pricesVersion';
+import { createClient } from '@supabase/supabase-js';
 
+// Public, no-auth endpoint that returns the last known price version.
+// The version is bumped by /api/prices/revalidate when the streamer writes.
 export async function GET() {
-  try {
-    const supabase = await getSupabaseServerClient();
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+  // Prefer the in-memory version bumped by /api/prices/revalidate
+  let version = getPricesVersion();
 
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401, headers: { 'Cache-Control': 'no-store' } });
+  // Fallback: if version is null (e.g., app just booted), read latest from DB with service role
+  if (!version) {
+    try {
+      const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+      const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (url && key) {
+        const supabase = createClient(url, key);
+        const { data } = await supabase
+          .from('prices')
+          .select('updated_at')
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        version = (data as { updated_at?: string | null } | null)?.updated_at || null;
+      }
+    } catch {
+      // ignore; keep version as null
     }
-
-    const { data, error } = await supabase
-      .from('prices')
-      .select('updated_at')
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500, headers: { 'Cache-Control': 'no-store' } });
-    }
-
-    return NextResponse.json(
-      {
-        version: data?.updated_at ?? null,
-        now: new Date().toISOString(),
-      },
-      { headers: { 'Cache-Control': 'no-store' } }
-    );
-  } catch (e: any) {
-    return NextResponse.json({ error: String(e?.message || e) }, { status: 500, headers: { 'Cache-Control': 'no-store' } });
   }
+
+  return NextResponse.json(
+    {
+      version: version ?? null,
+      now: new Date().toISOString(),
+    },
+    { headers: { 'Cache-Control': 'no-store' } }
+  );
 }

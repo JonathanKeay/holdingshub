@@ -5,37 +5,28 @@ import { getPortfoliosWithHoldingsAndCash, getAllHoldingsAndCashSummary } from '
 import { fetchAndCachePrices } from '@/lib/prices';
 import { fetchExchangeRatesToGBP } from '@/lib/fx';
 import { getCurrencySymbol } from '@/lib/currency';
-import { formatCurrency } from '@/lib/formatCurrency';
 import { getSupabaseServerClient } from '@/lib/supabase-server';
-import { LogoWithFallback } from '@/components/LogoWithFallback';
 import { TotalHoldingsTable } from '@/components/TotalHoldingsTable';
 import { PerPortfolioTable } from '@/components/PerPortfolioTable';
-import {
-  POSITIVE_BADGE,
-  NEGATIVE_BADGE,
-  POSITIVE_TEXT,
-  NEGATIVE_TEXT,
-  THEME_BLUE_TEXT,
-  THEME_BLUE_BADGE,
-  THEME_BLUE_DISABLED,
-  THEME_BLUE_DISABLED_BG,
-} from '@/lib/uiColors';
 import { unstable_cache } from 'next/cache';
 import { redirect } from 'next/navigation';
 import LivePricesRefresher from '@/components/LivePricesRefresher';
 import MarketStatusDots from '@/components/MarketStatusDots';
+import MarketStatusBadges from '@/components/MarketStatusBadges';
 import PortfolioExpandCollapseControls from '@/components/PortfolioExpandCollapseControls';
+import RefreshIndicator from '@/components/RefreshIndicator';
 
 // Cache FX for 60s; cache prices for 30s (keyed by sorted tickers)
 // Add tags so we can optionally invalidate via a webhook/job later.
 const getFxCached = unstable_cache(fetchExchangeRatesToGBP, ['fx-v1'], { revalidate: 60, tags: ['fx'] });
 const getPricesCached = unstable_cache(
   async (tickersKey: string, tickerQuantities: Record<string, number>) => {
-    const tickers = JSON.parse(tickersKey) as string[];
+    const parsed = JSON.parse(tickersKey);
+    const tickers: string[] = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.tickers) ? parsed.tickers : [];
     return fetchAndCachePrices(tickers, tickerQuantities);
   },
   ['prices-v1'],
-  { revalidate: 30, tags: ['prices'] }
+  { revalidate: 10, tags: ['prices'] }
 );
 
 export default async function Dashboard() {
@@ -58,20 +49,27 @@ export default async function Dashboard() {
 
   const portfoliosPromise = getPortfoliosWithHoldingsAndCash(supabase);
   const totalSummaryPromise = getAllHoldingsAndCashSummary(supabase);
+  const pricesVersionPromise = supabase
+    .from('prices')
+    .select('updated_at')
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
   // Await DB pieces together
   const [
     { data: settings },
     portfoliosRaw,
     { holdings: totalHoldingsRaw, cash_balances: totalCashBalances },
-  ] = await Promise.all([settingsPromise, portfoliosPromise, totalSummaryPromise]);
+    pricesVersionRow,
+  ] = await Promise.all([settingsPromise, portfoliosPromise, totalSummaryPromise, pricesVersionPromise]);
 
   // Settings -> filters
   const showZeroHoldings: boolean = !!settings?.show_zero_holdings;
   const visibleStatusesSet = new Set(
     (settings?.visible_statuses ?? ['active']).map((s: string) => String(s).toLowerCase().trim())
   );
-  const keepHolding = (h: any) => {
+  const keepHolding = (h: { status?: string | null; total_shares: number }) => {
     const status = (h.status ? String(h.status) : 'unknown').toLowerCase();
     const hasUnits = (h.total_shares ?? 0) !== 0;
     if (!showZeroHoldings && !hasUnits) return false;
@@ -110,7 +108,9 @@ export default async function Dashboard() {
     }
   }
   const allTickersSorted = Object.keys(tickerQuantities).sort(); // stable cache key
-  const tickersKey = JSON.stringify(allTickersSorted);
+  // Include latest prices version to break cache immediately when any price changes
+  const latestVersion: string | null = (pricesVersionRow && 'data' in (pricesVersionRow as object) && (pricesVersionRow as { data?: { updated_at?: string | null } }).data?.updated_at) || null;
+  const tickersKey = JSON.stringify({ tickers: allTickersSorted, v: latestVersion });
 
   // Prices & FX in parallel (cached)
   const [prices, fxRates] = await Promise.all([
@@ -118,23 +118,21 @@ export default async function Dashboard() {
     getFxCached(),
   ]);
 
-  // Helper to convert -> GBP
-  const toGBP = (amount: number, ccy?: string) =>
-    amount * (fxRates[(ccy || 'GBP').toUpperCase()] ?? 1);
+  // Helper to convert -> GBP (kept inline where needed)
 
-  // Global cash: sum per-currency in GBP
-  const totalCashGBP =
-    totalCashBalances?.reduce((sum, cb) => sum + toGBP(cb.balance, cb.currency), 0) ?? 0;
+  // Note: cash totals per currency are displayed via the tables; no separate header total here.
 
   return (
     <main className="p-6 max-w-6xl mx-auto">
   <h1 className="text-2xl font-bold mb-2">HoldingsHub(Dev)</h1>
-      <div className="mb-2">
+      <div className="mb-2 space-y-1">
         <MarketStatusDots tickers={allTickersSorted} />
+        <MarketStatusBadges tickers={allTickersSorted} />
+        <RefreshIndicator intervalMs={15_000} />
       </div>
 
       {/* Live refresh: Supabase Realtime + visibility-aware polling (lightweight) */}
-      <LivePricesRefresher tickers={allTickersSorted} refreshMinMs={15_000} pollMs={60_000} />
+  <LivePricesRefresher tickers={allTickersSorted} refreshMinMs={10_000} pollMs={12_000} forcedRefreshMs={45_000} />
 
       {/* --- TOTAL HOLDINGS TABLE (All Portfolios) --- */}
       <div className="mb-10">

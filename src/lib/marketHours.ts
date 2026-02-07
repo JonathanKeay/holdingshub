@@ -18,9 +18,16 @@ function getHM(now: Date, timeZone: string): { h: number; m: number; dow: number
     if (p.type === 'hour') h = parseInt(p.value, 10);
     else if (p.type === 'minute') m = parseInt(p.value, 10);
     else if (p.type === 'weekday') {
-      // Map Mon..Sun -> 1..7 style (Date.getDay() is 0=Sun)
-      // We'll just reuse JS convention by re-parsing once we have UTC day:
-      wd = now.getUTCDay(); // acceptable for weekday gating
+      // Use the formatted weekday string to derive local day-of-week (0=Sun..6=Sat)
+      const w = (p.value || '').toLowerCase();
+      if (w.startsWith('sun')) wd = 0;
+      else if (w.startsWith('mon')) wd = 1;
+      else if (w.startsWith('tue')) wd = 2;
+      else if (w.startsWith('wed')) wd = 3;
+      else if (w.startsWith('thu')) wd = 4;
+      else if (w.startsWith('fri')) wd = 5;
+      else if (w.startsWith('sat')) wd = 6;
+      else wd = now.getUTCDay();
     }
   }
   return { h, m, dow: wd };

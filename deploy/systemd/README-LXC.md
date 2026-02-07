@@ -25,6 +25,33 @@ Steps:
    sudo systemctl daemon-reload
    sudo systemctl enable --now portfolio-tracker
    ```
+   To also run the realtime price streamer as a separate service:
+   ```sh
+   # Ensure your env file includes SUPABASE_SERVICE_ROLE_KEY and FINNHUB_API_KEY
+   # Note: The repo only maintains the dev streamer unit template.
+   # For production, copy `holdingshub-prices-dev.service` and adapt paths/env as needed.
+   sudo cp deploy/systemd/holdingshub-prices-dev.service /etc/systemd/system/holdingshub-prices.service
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now holdingshub-prices
+   # Tail logs
+   journalctl -u holdingshub-prices -f
+   ```
+
+### Development services
+
+For a dev LXC with your dev checkout under `/opt/holdingshub-dev` and env at `/opt/holdingshub-dev/holdingshub-dev.env`:
+
+```sh
+sudo cp deploy/systemd/holdingshub-dev.service /etc/systemd/system/holdingshub-dev.service
+sudo cp deploy/systemd/holdingshub-prices-dev.service /etc/systemd/system/holdingshub-prices-dev.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now holdingshub-dev
+sudo systemctl enable --now holdingshub-prices-dev
+
+# Tail logs
+journalctl -u holdingshub-dev -f
+journalctl -u holdingshub-prices-dev -f
+```
 7. Put a reverse proxy in front (Caddy/NGINX/Traefik on Proxmox host or another LXC) and point it to `LXC_IP:3000`.
 
 ## Option 2: Docker inside LXC

@@ -15,11 +15,12 @@ services:
     environment:
       - NEXT_PUBLIC_APP_ORIGIN=${PUBLIC_URL}  # runtime, but note: NEXT_PUBLIC_* is baked at build for client bundle
       - PORT=3000
+      - NEXT_CACHE_DIR=/tmp/next-cache
     restart: unless-stopped
     networks:
       - web
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health || exit 1"]
+      test: ["CMD-SHELL", "node -e 'http=require(\"http\");http.get(\"http://127.0.0.1:3000/api/health\",r=>process.exit(r.statusCode===200?0:1)).on(\"error\",()=>process.exit(1));' "]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -38,6 +39,24 @@ services:
       - caddy_config:/config
     environment:
       - SITE_DOMAIN=${SITE_DOMAIN}
+    depends_on:
+      - app
+    networks:
+      - web
+
+  prices:
+    container_name: holdingshub-prices-prod
+    image: node:22-alpine
+    working_dir: /app
+    # Install deps if needed, then run the streamer (TypeScript via tsx)
+    command: sh -lc '[ -d node_modules ] || npm ci; npm run prices:stream'
+    environment:
+      - NODE_ENV=development
+    env_file:
+      - .env.docker
+    volumes:
+      - /opt/holdingshub:/app
+    restart: unless-stopped
     depends_on:
       - app
     networks:

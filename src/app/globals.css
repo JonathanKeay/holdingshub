@@ -53,6 +53,17 @@ body {
   font-family: var(--font-sans);
 }
 
+/* Mobile stability: avoid horizontal drift and rubber-banding interactions on nested areas */
+html, body {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable both-edges;
+}
+body { touch-action: pan-y; }
+
 /* Compact table rows: less vertical padding, slightly tighter line-height (keeps font-size) */
 .table-compact td,
 .table-compact th {

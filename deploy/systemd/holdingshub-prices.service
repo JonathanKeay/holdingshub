@@ -1,0 +1,25 @@
+# DEPRECATED TEMPLATE
+# This production unit file is kept only for reference and is not used by default.
+# Prefer using the dev system-level unit `holdingshub-prices-dev.service` as a base
+# and tailor a production unit for your environment if needed.
+
+[Unit]
+Description=DEPRECATED - HoldingsHub - Price Streamer (Realtime Prices)
+After=network.target
+
+[Service]
+Type=simple
+Environment=NODE_ENV=production
+# Point to your prod env file with SUPABASE_SERVICE_ROLE_KEY, FINNHUB_API_KEY, etc.
+EnvironmentFile=/opt/holdingshub-prod/holdingshub-prod.env
+# Adjust WorkingDirectory to your production checkout path
+WorkingDirectory=/opt/holdingshub-prod
+ExecStart=/usr/bin/npm run prices:stream --silent
+Restart=always
+RestartSec=5
+# Optional: set user/group you want to run as
+# User=www-data
+# Group=www-data
+
+[Install]
+WantedBy=multi-user.target

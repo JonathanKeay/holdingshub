@@ -1,0 +1,19 @@
+# DEPRECATED TEMPLATE
+# This user-mode unit is not used by default. Prefer the system-level
+# dev service `holdingshub-prices-dev.service`.
+
+[Unit]
+Description=DEPRECATED - HoldingsHub - Price Streamer (Development, User Mode)
+After=default.target
+
+[Service]
+Type=simple
+Environment=NODE_ENV=development
+EnvironmentFile=%h/.config/holdingshub/holdingshub-dev.env
+WorkingDirectory=/opt/holdingshub
+ExecStart=/usr/bin/npm run prices:stream --silent
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

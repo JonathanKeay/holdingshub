@@ -9,16 +9,42 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=3000
+    env_file:
+      - .env.docker
+    networks:
+      holdingshub_web:
+        aliases:
+          - app
     volumes:
       - /opt/holdingshub:/app              # <— absolute path since you're on the server
       - node_modules:/app/node_modules
     ports:
-      - "3000:3000"                         # optional (Caddy can still proxy internally)
+      - "3000:3000"                         # dev host port as original
     healthcheck:
       test: ["CMD-SHELL", "echo dev mode, skipping healthcheck && exit 0"]
       interval: 30s
       timeout: 3s
       retries: 1
       start_period: 5s
+
+  prices:
+    container_name: holdingshub-prices-dev
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -lc '[ -d node_modules ] || npm ci; npx tsx scripts/price-streamer.ts'
+    environment:
+      - NODE_ENV=development
+    volumes:
+      - /opt/holdingshub:/app
+      - node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    restart: unless-stopped
+    depends_on:
+      - app
 volumes:
   node_modules:
+
+networks:
+  holdingshub_web:
+    external: true
