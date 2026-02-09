@@ -36,7 +36,7 @@ export default async function MobilePage() {
   // Load settings for the same filters as the desktop page
   const settingsPromise = supabase
     .from('settings')
-    .select('show_zero_holdings, visible_statuses')
+    .select('show_zero_holdings, visible_statuses, portfolio_prefs')
     .eq('id', 'global')
     .single();
   const totalSummaryPromise = getAllHoldingsAndCashSummary(supabase);
@@ -47,6 +47,13 @@ export default async function MobilePage() {
   const visibleStatusesSet = new Set(
     (settings?.visible_statuses ?? ['active']).map((s: string) => String(s).toLowerCase().trim())
   );
+
+  const themePref: 'system' | 'light' | 'dark' =
+    settings?.portfolio_prefs?.theme === 'light' || settings?.portfolio_prefs?.theme === 'dark' || settings?.portfolio_prefs?.theme === 'system'
+      ? settings.portfolio_prefs.theme
+      : 'system';
+  const logoThemeParam = themePref === 'dark' ? 'dark' : themePref === 'light' ? 'light' : null;
+  const logoProxyExtras = `${logoThemeParam ? `&theme=${encodeURIComponent(logoThemeParam)}` : ''}&format=png&fallback=404`;
   const keepHolding = (h: Holding) => {
     const status = (h.status ? String(h.status) : 'unknown').toLowerCase();
     const hasUnits = (h.total_shares ?? 0) !== 0;
@@ -61,11 +68,11 @@ export default async function MobilePage() {
       const url = url0 ? url0.replace(/^manual:/i, '') : null;
       if (!url) return null;
       const m0 = /^domain:(.+)$/i.exec(url);
-      if (m0 && m0[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m0[1])}`;
+      if (m0 && m0[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m0[1])}${logoProxyExtras}`;
       const m1 = /^https?:\/\/logo\.clearbit\.com\/(.+)$/i.exec(url);
-      if (m1 && m1[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m1[1])}`;
+      if (m1 && m1[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m1[1])}${logoProxyExtras}`;
       const m2 = /^https?:\/\/img\.logo\.dev\/(.+)$/i.exec(url);
-      if (m2 && m2[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m2[1])}`;
+      if (m2 && m2[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m2[1])}${logoProxyExtras}`;
       return `/api/logo-proxy?url=${encodeURIComponent(url)}`;
     })(),
   }));
