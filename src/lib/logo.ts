@@ -1,6 +1,11 @@
 import { supabase } from './supabase';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+function isManualLogoUrl(value?: string | null) {
+  if (!value) return false;
+  return /^manual:/i.test(String(value).trim());
+}
+
 /**
  * Populate `assets.logo_url` with a domain marker when available.
  * Writes `logo_url` as `domain:<hostname>` so the frontend can proxy via Logo.dev.
@@ -10,7 +15,7 @@ export async function fetchAndCacheLogosFromDomain(client?: SupabaseClient) {
   const db = client ?? supabase;
   const { data: assets, error } = await db
     .from('assets')
-    .select('id, domain');
+    .select('id, domain, logo_url');
 
   if (error) {
     console.error('Error fetching assets:', error);
@@ -19,6 +24,7 @@ export async function fetchAndCacheLogosFromDomain(client?: SupabaseClient) {
 
   for (const asset of assets || []) {
     if (!asset?.domain) continue;
+    if (isManualLogoUrl((asset as { logo_url?: string | null }).logo_url)) continue;
     const logoUrl = `domain:${asset.domain}`;
     const { error: upErr } = await db
       .from('assets')
@@ -60,7 +66,9 @@ export async function fetchAndCacheLogos(tickers: string[], client?: SupabaseCli
       const { error } = await db
         .from('assets')
         .update({ logo_url: `domain:${domain}` })
-        .eq('ticker', t);
+        .eq('ticker', t)
+        // Respect manual overrides
+        .or('logo_url.is.null,logo_url.not.ilike.manual:%');
       if (error) console.error(`Failed to upsert logo for ${t}:`, error);
     } catch (e) {
       console.error(`Error fetching logo for ${t}:`, e instanceof Error ? e.message : String(e));
@@ -90,7 +98,12 @@ export async function updateLogoUrlForTickersUsingFinnhub(tickers: string[], cli
       } catch {}
       if (!domain) continue;
       const logoUrl = `domain:${domain}`;
-      const { error } = await db.from('assets').update({ logo_url: logoUrl }).eq('ticker', t);
+      const { error } = await db
+        .from('assets')
+        .update({ logo_url: logoUrl })
+        .eq('ticker', t)
+        // Respect manual overrides
+        .or('logo_url.is.null,logo_url.not.ilike.manual:%');
       if (error) console.error(`Update failed for ${t}:`, error);
     } catch (e) {
       console.error(`Error resolving ${t}:`, e instanceof Error ? e.message : String(e));

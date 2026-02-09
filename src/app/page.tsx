@@ -83,7 +83,8 @@ export default async function Dashboard() {
       ...h,
       currencySymbol: getCurrencySymbol(h.currency),
       logo_url: (() => {
-        const url = h.logo_url || null;
+        const url0 = h.logo_url || null;
+        const url = url0 ? url0.replace(/^manual:/i, '') : null;
         if (!url) return null;
         const m0 = /^domain:(.+)$/i.exec(url);
         if (m0 && m0[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m0[1])}`;
@@ -105,7 +106,8 @@ export default async function Dashboard() {
         ...h,
         currencySymbol: getCurrencySymbol(h.currency),
         logo_url: (() => {
-          const url = h.logo_url || null;
+          const url0 = h.logo_url || null;
+          const url = url0 ? url0.replace(/^manual:/i, '') : null;
           if (!url) return null;
           const m0 = /^domain:(.+)$/i.exec(url);
           if (m0 && m0[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m0[1])}`;
