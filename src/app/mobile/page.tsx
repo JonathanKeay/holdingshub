@@ -56,7 +56,17 @@ export default async function MobilePage() {
 
   const holdings = summary.holdings.filter(keepHolding).map((h) => ({
     ...h,
-    logo_url: h.logo_url || null,
+    logo_url: (() => {
+      const url = h.logo_url || null;
+      if (!url) return null;
+      const m0 = /^domain:(.+)$/i.exec(url);
+      if (m0 && m0[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m0[1])}`;
+      const m1 = /^https?:\/\/logo\.clearbit\.com\/(.+)$/i.exec(url);
+      if (m1 && m1[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m1[1])}`;
+      const m2 = /^https?:\/\/img\.logo\.dev\/(.+)$/i.exec(url);
+      if (m2 && m2[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m2[1])}`;
+      return `/api/logo-proxy?url=${encodeURIComponent(url)}`;
+    })(),
   }));
 
   // Build ticker list for prices

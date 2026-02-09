@@ -6,16 +6,18 @@ export function LogoWithFallback({
   src,
   alt,
   className = 'h-4 w-4 mr-2',
+  fallback,
   ...rest
 }: {
   src: string | null;
   alt?: string;
   className?: string;
+  fallback?: React.ReactNode;
   [key: string]: any;
 }) {
   const [error, setError] = useState(false);
 
-  if (!src || error) return null;
+  if (!src || error) return fallback ?? null;
 
   return (
     <img

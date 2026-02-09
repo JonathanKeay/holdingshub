@@ -4,6 +4,8 @@ export const dynamic = 'force-dynamic';
 import { getSupabaseServerClient } from '@/lib/supabase-server';
 
 type ChangesMap = Record<string, number>; // ticker -> GBP change for selected range
+type ChangesNativeMap = Record<string, number>; // ticker -> native currency change for selected range
+type CurrencyByTicker = Record<string, string>; // ticker -> native currency code
 
 function toISODate(d: Date) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString().slice(0, 10);
@@ -57,6 +59,11 @@ export async function GET(request: Request) {
   };
   const holdings = (summary.holdings || []).filter(keepHolding) as HoldingRow[];
   const tickers = holdings.map(h => h.ticker).filter(Boolean);
+  const currency_by_ticker: CurrencyByTicker = {};
+  for (const h of holdings) {
+    if (!h?.ticker) continue;
+    currency_by_ticker[h.ticker] = (h.currency || 'GBP').toUpperCase();
+  }
 
   // Compute today/from (date strings)
   function dateInTzISO(d: Date, timeZone: string) {
@@ -85,7 +92,7 @@ export async function GET(request: Request) {
   }
 
   // If no holdings/tickers, return empty map
-  if (tickers.length === 0) return NextResponse.json({ range, from, to: today, changes: {} });
+  if (tickers.length === 0) return NextResponse.json({ range, from, to: today, changes: {}, changes_native: {}, currency_by_ticker });
 
   // 1D: compute from current prices + previous_close only (fast path)
   if (range === '1D') {
@@ -115,32 +122,47 @@ export async function GET(request: Request) {
       cpMap[r.ticker] = { price, prev };
     }
     const changes: ChangesMap = {};
+    const changes_native: ChangesNativeMap = {};
     for (const t of tickers) {
       const h = holdingsByTicker[t];
       if (!h || !h.shares) continue;
       const rate = fxToday[h.ccy] ?? 1;
       const row = cpMap[t];
-      if (!row || !(row.price > 0) || !(row.prev > 0)) { changes[t] = 0; continue; }
-      changes[t] = (row.price - row.prev) * h.shares * rate;
+      if (!row || !(row.price > 0) || !(row.prev > 0)) {
+        changes[t] = 0;
+        changes_native[t] = 0;
+        continue;
+      }
+      const deltaNative = (row.price - row.prev) * h.shares;
+      changes_native[t] = deltaNative;
+      changes[t] = deltaNative * rate;
     }
-    return NextResponse.json({ range, from, to: today, changes });
+    return NextResponse.json({ range, from, to: today, changes, changes_native, currency_by_ticker });
   }
 
   // Longer ranges: use price at 'from' and 'today'
   type PriceHistRow = { ticker: string; date: string; price: number | null; price_multiplier: number | null };
   type CurrentPriceRow = { ticker: string; price: number | null; price_multiplier: number | null };
 
-  const [{ data: phFrom }, { data: phToday }, { data: cp }, { data: fxFrom }, { data: fxTodayRow }, { getAllHoldingsAndCashSummary: getSummary2 }] = await Promise.all([
+  const bufferDays = 180;
+  const fromStart = toISODate(addDays(new Date(from + 'T00:00:00Z'), -bufferDays));
+  const todayStart = toISODate(addDays(new Date(today + 'T00:00:00Z'), -bufferDays));
+
+  const [{ data: phFromWin }, { data: phTodayWin }, { data: cp }, { data: fxFromWin }, { data: fxTodayWin }, { getAllHoldingsAndCashSummary: getSummary2 }] = await Promise.all([
     supabase
       .from('price_history')
       .select('ticker,date,price,price_multiplier')
       .in('ticker', tickers)
-      .eq('date', from),
+      .gte('date', fromStart)
+      .lte('date', from)
+      .order('date', { ascending: true }),
     supabase
       .from('price_history')
       .select('ticker,date,price,price_multiplier')
       .in('ticker', tickers)
-      .eq('date', today),
+      .gte('date', todayStart)
+      .lte('date', today)
+      .order('date', { ascending: true }),
     supabase
       .from('prices')
       .select('ticker,price,price_multiplier')
@@ -148,31 +170,42 @@ export async function GET(request: Request) {
     supabase
       .from('fx_rates')
       .select('date,quotes')
-      .eq('date', from)
-      .maybeSingle<{ date: string; quotes: Record<string, number> | null }>(),
+      .gte('date', fromStart)
+      .lte('date', from)
+      .order('date', { ascending: true }),
     supabase
       .from('fx_rates')
       .select('date,quotes')
-      .eq('date', today)
-      .maybeSingle<{ date: string; quotes: Record<string, number> | null }>(),
+      .gte('date', todayStart)
+      .lte('date', today)
+      .order('date', { ascending: true }),
     import('@/lib/queries'),
   ]);
 
-  const fxFromMap = parseFxQuotesToGBP(fxFrom?.quotes || undefined);
-  const fxToday = parseFxQuotesToGBP(fxTodayRow?.quotes || undefined);
+  // Latest FX on/before each endpoint date (within buffer window)
+  const fxFromMap = (() => {
+    const rows = (fxFromWin || []) as { date: string; quotes: Record<string, number> | null }[];
+    const last = rows.length ? rows[rows.length - 1] : null;
+    return parseFxQuotesToGBP(last?.quotes || undefined);
+  })();
+  const fxToday = (() => {
+    const rows = (fxTodayWin || []) as { date: string; quotes: Record<string, number> | null }[];
+    const last = rows.length ? rows[rows.length - 1] : null;
+    return parseFxQuotesToGBP(last?.quotes || undefined);
+  })();
 
-  // Build price maps
   const fromPrice: Record<string, number> = {};
-  for (const r of (phFrom || []) as PriceHistRow[]) {
+  for (const r of (phFromWin || []) as PriceHistRow[]) {
     const mult = Number(r.price_multiplier || 1) || 1;
     const price = Number(r.price || 0) * mult;
-    if (price > 0) fromPrice[r.ticker] = price;
+    if (price > 0) fromPrice[r.ticker] = price; // overwrites → last in window wins
   }
+
   const todayPrice: Record<string, number> = {};
-  for (const r of (phToday || []) as PriceHistRow[]) {
+  for (const r of (phTodayWin || []) as PriceHistRow[]) {
     const mult = Number(r.price_multiplier || 1) || 1;
     const price = Number(r.price || 0) * mult;
-    if (price > 0) todayPrice[r.ticker] = price;
+    if (price > 0) todayPrice[r.ticker] = price; // last in window wins
   }
   for (const r of (cp || []) as CurrentPriceRow[]) {
     const mult = Number(r.price_multiplier || 1) || 1;
@@ -183,6 +216,7 @@ export async function GET(request: Request) {
   const todayHoldingsSummary = await getSummary2(supabase, { asOf: today });
   const todayHoldings = (todayHoldingsSummary.holdings || []).filter(keepHolding) as HoldingRow[];
   const changes: ChangesMap = {};
+  const changes_native: ChangesNativeMap = {};
   for (const h of todayHoldings) {
     const t = h.ticker;
     const shares = h.total_shares || 0;
@@ -192,9 +226,14 @@ export async function GET(request: Request) {
     const pToday = todayPrice[t] || 0;
     const rFrom = fxFromMap[ccy] ?? 1;
     const rToday = fxToday[ccy] ?? 1;
-    if (pFrom > 0 && pToday > 0) changes[t] = shares * (pToday * rToday - pFrom * rFrom);
-    else changes[t] = 0;
+    if (pFrom > 0 && pToday > 0) {
+      changes_native[t] = shares * (pToday - pFrom);
+      changes[t] = shares * (pToday * rToday - pFrom * rFrom);
+    } else {
+      changes_native[t] = 0;
+      changes[t] = 0;
+    }
   }
 
-  return NextResponse.json({ range, from, to: today, changes });
+  return NextResponse.json({ range, from, to: today, changes, changes_native, currency_by_ticker });
 }

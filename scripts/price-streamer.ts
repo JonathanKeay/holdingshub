@@ -16,6 +16,13 @@ const YAHOO_POLL_INTERVAL_MS = Number(process.env.YAHOO_POLL_INTERVAL_MS ?? '300
 const JITTER_FACTOR = Number(process.env.PRICES_JITTER_FACTOR ?? '0.05'); // ±5%
 const TRADE_MAX_AGE_MS = Number(process.env.TRADE_MAX_AGE_MS ?? '300000'); // 5m: ignore stale WS trades older than this
 
+// When markets are closed, US symbols may not emit WS trades.
+// Seed stale prices on startup using REST quotes so the UI isn't stuck on week-old values.
+const PRICES_SEED_ON_STARTUP = (process.env.PRICES_SEED_ON_STARTUP ?? '1') !== '0';
+const PRICES_STARTUP_SEED_MAX_AGE_MS = Number(process.env.PRICES_STARTUP_SEED_MAX_AGE_MS ?? String(12 * 60 * 60 * 1000)); // 12h
+const PRICES_SEED_ON_WATCHLIST_CHANGE = (process.env.PRICES_SEED_ON_WATCHLIST_CHANGE ?? '1') !== '0';
+const PRICES_WATCHLIST_SEED_DEBOUNCE_MS = Number(process.env.PRICES_WATCHLIST_SEED_DEBOUNCE_MS ?? '5000');
+
 function jitter(ms: number, factor = JITTER_FACTOR) {
   const d = (Math.random() * 2 - 1) * factor;
   return Math.max(0, Math.round(ms * (1 + d)));
@@ -265,25 +272,45 @@ async function main() {
   const multiplier: Record<string, number> = first.multiplier;
 
   // Periodically refresh the watchlists (e.g., every 2 minutes) to follow position changes
+  let watchlistSeedTimer: NodeJS.Timeout | null = null;
+  const seenUSTickers = new Set<string>(tickersUS);
   setInterval(async () => {
     try {
       const next = await loadActivePositionTickers(supabase);
-      tickersUS = next.us;
+      const nextUS = next.us;
+      // Detect newly-added US tickers
+      const addedUS = nextUS.filter(t => !seenUSTickers.has(t));
+      tickersUS = nextUS;
       tickersNonUS = next.nonUS;
       for (const [k,v] of Object.entries(next.multiplier)) multiplier[k] = v;
+
+      for (const t of nextUS) seenUSTickers.add(t);
+
+      // If new US tickers appear (e.g., after imports), seed them soon so UI isn't stale.
+      if (PRICES_SEED_ON_WATCHLIST_CHANGE && addedUS.length > 0) {
+        if (watchlistSeedTimer) clearTimeout(watchlistSeedTimer);
+        watchlistSeedTimer = setTimeout(() => {
+          seedUSPricesOnce(supabase, addedUS).catch(() => {});
+        }, PRICES_WATCHLIST_SEED_DEBOUNCE_MS);
+      }
       } catch { /* ignore transient errors */ }
   }, 120_000);
 
   // Prime existing previous_close values and last written price baselines
   const { data: cached } = await supabase
     .from('prices')
-    .select('ticker,previous_close,price');
+    .select('ticker,previous_close,price,updated_at');
   const prevClose: Record<string, number> = {};
   const lastWritten: Map<string, number> = new Map();
-  type CachedRow = { ticker: string; previous_close: number | null; price: number | null };
+  const lastUpdatedAtMs: Record<string, number> = {};
+  type CachedRow = { ticker: string; previous_close: number | null; price: number | null; updated_at?: string | null };
   for (const r of (cached as CachedRow[] | null) || []) {
     prevClose[r.ticker] = Number(r.previous_close || 0);
     if (r.price != null) lastWritten.set(r.ticker, Number(r.price));
+    if (r.updated_at) {
+      const ms = Date.parse(String(r.updated_at));
+      if (Number.isFinite(ms) && ms > 0) lastUpdatedAtMs[r.ticker] = ms;
+    }
   }
 
   // US: Finnhub WS streaming
@@ -496,7 +523,62 @@ async function main() {
     }
   }
 
+  async function seedUSPricesOnce(client: SupabaseClient, tickersOverride?: string[]) {
+    if (!PRICES_SEED_ON_STARTUP && !tickersOverride?.length) return;
+    const batch = (tickersOverride?.length ? tickersOverride : tickersUS).slice();
+    if (batch.length === 0) return;
+
+    const nowMs = Date.now();
+    const stale = (t: string) => {
+      const last = lastUpdatedAtMs[t] ?? 0;
+      return !last || (nowMs - last) > PRICES_STARTUP_SEED_MAX_AGE_MS;
+    };
+
+    // Prefer Finnhub REST for US tickers, but fall back to Yahoo if FINNHUB_API_KEY isn't set.
+    const useFinnhub = !!finnhubToken;
+    const nowIso = new Date(nowMs).toISOString();
+    const rows: PriceRow[] = [];
+
+    for (const t of batch) {
+      if (!stale(t)) continue;
+      const mult = multiplier[t] ?? 1;
+
+      if (useFinnhub) {
+        const q = await fetchFinnhubQuote(t, finnhubToken);
+        if (q) {
+          const price = Number((q.c || 0).toFixed(6));
+          const pc = Number((q.pc || 0).toFixed(6)) || (prevClose[t] ?? 0);
+          if (price > 0 || pc > 0) {
+            rows.push({ ticker: t, price: price > 0 ? price : 0, previous_close: pc || 0, price_multiplier: mult, updated_at: nowIso });
+            if (price > 0) lastWritten.set(t, price);
+            if (pc > 0) prevClose[t] = pc;
+            lastUpdatedAtMs[t] = nowMs;
+          }
+        }
+      } else {
+        const y = await fetchYahooPrice(t);
+        if (y) {
+          const price = Number((y.price || 0).toFixed(6));
+          const pc = Number((y.previous_close || 0).toFixed(6)) || (prevClose[t] ?? 0);
+          if (price > 0 || pc > 0) {
+            rows.push({ ticker: t, price: price > 0 ? price : 0, previous_close: pc || 0, price_multiplier: mult, updated_at: nowIso });
+            if (price > 0) lastWritten.set(t, price);
+            if (pc > 0) prevClose[t] = pc;
+            lastUpdatedAtMs[t] = nowMs;
+          }
+        }
+      }
+
+      // Polite pause to avoid hammering providers
+      await new Promise(r => setTimeout(r, 80));
+    }
+
+    if (rows.length) await persistRows(client, rows, useFinnhub ? 'finnhub-seed' : 'yahoo-seed');
+  }
+
   // Kick off loops
+  // Seed US prices once on startup so a restart during closed markets still refreshes stale prices.
+  await seedUSPricesOnce(supabase);
   // Poll all non-US markets via Yahoo every 5 minutes
   pollNonUSOnce(supabase);
   flushUS(supabase);

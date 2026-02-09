@@ -11,6 +11,7 @@ const nextConfig: NextConfig = {
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: 'logo.clearbit.com' },
+      { protocol: 'https', hostname: 'static.finnhub.io' },
     ],
   },
   // Note: experimental options removed to avoid Next config warnings

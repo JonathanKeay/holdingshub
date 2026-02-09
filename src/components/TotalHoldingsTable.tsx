@@ -301,7 +301,7 @@ export function TotalHoldingsTable({
         onScroll={(e) => setScrolled(e.currentTarget.scrollLeft > 0)}
       >
         {hasOverflow && scrolled && (
-          <div className="pointer-events-none absolute left-0 top-0 h-full w-4 bg-gradient-to-r from-black/25 to-transparent transition-opacity" />
+          <div className="pointer-events-none absolute left-0 top-0 h-full w-4 bg-linear-to-r from-black/25 to-transparent transition-opacity" />
         )}
       <table className="w-full text-sm">
         <thead className="bg-themeblue text-white font-semibold border-b-2 border-themeblue-hover">
@@ -385,11 +385,12 @@ export function TotalHoldingsTable({
                 {/* Company (sticky) */}
                 <td className="p-1 align-top sticky left-0 z-10 bg-white" style={{ minWidth: 140 }}>
                   <div className="flex items-center">
-                    {h.logo_url ? (
-                      <img src={h.logo_url} alt={`${h.ticker} logo`} className="h-10 w-10 rounded bg-white border mr-2" />
-                    ) : (
-                      <TickerFallbackIcon ticker={h.ticker} />
-                    )}
+                    <LogoWithFallback
+                      src={h.logo_url || null}
+                      alt={`${h.ticker} logo`}
+                      className="h-10 w-10 rounded bg-white border mr-2"
+                      fallback={<TickerFallbackIcon ticker={h.ticker} />}
+                    />
                     <div>
                       <div className={`${THEME_BLUE_TEXT} font-bold`}>{h.ticker}</div>
                       <div className={`${THEME_LBLUE_TEXT} text-xs`}>{h.company_name || h.ticker}</div>

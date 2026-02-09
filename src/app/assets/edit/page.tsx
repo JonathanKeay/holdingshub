@@ -7,13 +7,24 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+type AssetRow = {
+  id: string;
+  ticker: string;
+  resolved_ticker: string | null;
+  name: string | null;
+  status: string | null;
+  delisted_at: string | null;
+  price_multiplier: number | null;
+};
+
 export default function EditAssetPage() {
   const [ticker, setTicker] = useState('');
-  const [asset, setAsset] = useState<any>(null);
+  const [asset, setAsset] = useState<AssetRow | null>(null);
   const [resolvedTicker, setResolvedTicker] = useState('');
   const [name, setName] = useState('');
   const [status, setStatus] = useState('');
   const [delistedAt, setDelistedAt] = useState('');
+  const [priceMultiplier, setPriceMultiplier] = useState('');
   const [message, setMessage] = useState('');
 
   useEffect(() => {
@@ -26,6 +37,7 @@ export default function EditAssetPage() {
         setName('');
         setStatus('');
         setDelistedAt('');
+        setPriceMultiplier('');
       }, 2000);
       return () => clearTimeout(timer);
     }
@@ -50,11 +62,12 @@ export default function EditAssetPage() {
       setAsset(null);
     } else {
       setMessage('');
-      setAsset(data);
+      setAsset(data as AssetRow);
       setResolvedTicker(data.resolved_ticker ?? '');
       setName(data.name ?? '');
       setStatus(data.status ?? '');
       setDelistedAt(data.delisted_at ?? '');
+      setPriceMultiplier(String(data.price_multiplier ?? ''));
     }
   };
 
@@ -64,16 +77,23 @@ export default function EditAssetPage() {
       return;
     }
 
+    const priceMultiplierNum = priceMultiplier.trim() === '' ? null : Number(priceMultiplier);
+    if (priceMultiplierNum !== null && !Number.isFinite(priceMultiplierNum)) {
+      setMessage('Invalid price multiplier');
+      return;
+    }
+
     const updatePayload = {
       name: name.trim() || null,
       resolved_ticker: resolvedTicker.trim() || null,
       status: status || 'active',
       delisted_at: delistedAt || null,
+      price_multiplier: priceMultiplierNum,
       last_failed_resolved_ticker: null,
       resolution_attempted_at: null,
     };
 
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('assets')
       .update(updatePayload)
       .eq('id', asset.id)
@@ -120,6 +140,18 @@ export default function EditAssetPage() {
           </div>
           <div>
             <strong>Ticker:</strong> {asset.ticker}
+          </div>
+          <div>
+            <label className="block font-medium">Price Multiplier</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              step="0.0001"
+              placeholder="1 (or 0.01 for GBp→GBP)"
+              value={priceMultiplier}
+              onChange={(e) => setPriceMultiplier(e.target.value)}
+              className="border p-2 w-full"
+            />
           </div>
           <div>
             <label className="block font-medium">Resolved Ticker</label>

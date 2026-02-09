@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, useCallback, useEffect } from 'react';
-import Image from 'next/image';
+import { LogoWithFallback } from '@/components/LogoWithFallback';
 import type { Holding } from '@/lib/queries';
 import { formatCurrency } from '@/lib/formatCurrency';
 // Mobile-specific badges: red/green text on a light blue background for contrast on dark cards
@@ -46,8 +46,10 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
 export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP = 0, initialSeries }: Props) {
   const [sortBy, setSortBy] = useState<SortKey>('alphabetical');
   const [range, setRange] = useState<'1D'|'1W'|'1M'|'YTD'|'1Y'|'ALL'>('1D');
+  const [showGBPValues, setShowGBPValues] = useState<boolean>(false);
   const RANGE_KEY = 'mobileRangePrefV1';
   const SORT_KEY = 'mobileSortPrefV1';
+  const SHOW_GBP_KEY = 'mobileShowGBPValuesV1';
   // Detect device theme and default styles for contrast
   // useLightBg=true -> lighter blue surfaces/text; false -> dark blue cards with white text
   // Default to dark style on first load
@@ -99,7 +101,10 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
   const unrealised = useCallback((h: Holding) => mv(h) - h.total_cost, [mv]);
 
   // ---- Range changes for sorting by gain ----
-  const [rangeChanges, setRangeChanges] = useState<Record<string, number>>({});
+  const [rangeChangesGBP, setRangeChangesGBP] = useState<Record<string, number>>({});
+  const [rangeChangesNative, setRangeChangesNative] = useState<Record<string, number>>({});
+
+  const activeRangeChanges = showGBPValues ? rangeChangesGBP : rangeChangesNative;
 
   const sorted = useMemo(() => {
     const list = [...holdings];
@@ -119,13 +124,13 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
       case 'lowestUnrealised':
         return list.sort((a, b) => unrealised(a) - unrealised(b));
       case 'highestGain':
-        return list.sort((a, b) => (rangeChanges[b.ticker] ?? 0) - (rangeChanges[a.ticker] ?? 0));
+        return list.sort((a, b) => (activeRangeChanges[b.ticker] ?? 0) - (activeRangeChanges[a.ticker] ?? 0));
       case 'lowestGain':
-        return list.sort((a, b) => (rangeChanges[a.ticker] ?? 0) - (rangeChanges[b.ticker] ?? 0));
+        return list.sort((a, b) => (activeRangeChanges[a.ticker] ?? 0) - (activeRangeChanges[b.ticker] ?? 0));
       default:
         return list;
     }
-  }, [holdings, sortBy, mv, unrealised, rangeChanges]);
+  }, [holdings, sortBy, mv, unrealised, activeRangeChanges]);
 
   // Display helper: show whole numbers as integer; otherwise 1 decimal place
   const displayUnits = (shares: number) => {
@@ -153,7 +158,11 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
         // Kick off a fast request for range changes so table/badges sort instantly
         const fast = fetch(`/api/portfolio-changes?range=${encodeURIComponent(range)}&tz=${encodeURIComponent(tz)}`, { cache: 'no-store' })
           .then(r => r.ok ? r.json() : Promise.reject(new Error(`changes ${r.status}`)))
-          .then(j => { if (!cancelled) setRangeChanges((j.changes as Record<string, number>) || {}); })
+          .then(j => {
+            if (cancelled) return;
+            setRangeChangesGBP((j.changes as Record<string, number>) || {});
+            setRangeChangesNative((j.changes_native as Record<string, number>) || {});
+          })
           .catch(() => {});
 
         const res = await fetch(`/api/portfolio-series?range=${encodeURIComponent(range)}&tz=${encodeURIComponent(tz)}`, { cache: 'no-store' });
@@ -161,7 +170,8 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
         const json = await res.json();
         if (!cancelled) {
           setSeries(json.points as SeriesPoint[]);
-          setRangeChanges((json.changes as Record<string, number>) || {});
+          setRangeChangesGBP((json.changes as Record<string, number>) || {});
+          setRangeChangesNative((json.changes_native as Record<string, number>) || {});
         }
         await fast; // settle the fast call
       } catch (e: unknown) {
@@ -316,13 +326,32 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
         setSortBy(savedSort as SortKey);
       }
     } catch {}
+
+    try {
+      const savedShowGBP = localStorage.getItem(SHOW_GBP_KEY);
+      if (savedShowGBP === '1') setShowGBPValues(true);
+      if (savedShowGBP === '0') setShowGBPValues(false);
+    } catch {}
   }, []);
 
   const totalMarketGBP = sorted.reduce((sum, h) => sum + mv(h) * rate(h.currency), 0);
   const totalGBP = totalMarketGBP + cashGBP;
-  // Aggregate range-based change across tickers (cash excluded)
-  const headerChangeGBP = sorted.reduce((sum, h) => sum + (rangeChanges[h.ticker] ?? 0), 0);
-  const headerBaselineGBP = Math.max(0, totalGBP - headerChangeGBP);
+  // Header variance should match the chart.
+  // The API "changes" maps are per-ticker helpers for sorting; they intentionally exclude cash and can diverge
+  // from the chart when there are trades within the range (because they use shares-as-of-today).
+  const chartDeltaGBP = useMemo(() => {
+    if (!series || series.length < 2) return null;
+    return (series[series.length - 1]?.value_gbp ?? 0) - (series[0]?.value_gbp ?? 0);
+  }, [series]);
+  const chartBaselineGBP = useMemo(() => {
+    if (!series || series.length < 2) return null;
+    return series[0]?.value_gbp ?? 0;
+  }, [series]);
+
+  // Fallback while series is loading/empty
+  const fallbackChangeGBP = sorted.reduce((sum, h) => sum + (rangeChangesGBP[h.ticker] ?? 0), 0);
+  const headerChangeGBP = chartDeltaGBP ?? fallbackChangeGBP;
+  const headerBaselineGBP = chartBaselineGBP ?? Math.max(0, totalGBP - headerChangeGBP);
   const headerChangePct = headerBaselineGBP > 0 ? (headerChangeGBP / headerBaselineGBP) * 100 : 0;
 
   // Style helpers for previewing lighter background everywhere
@@ -357,18 +386,38 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
               {range}
             </span>
           </div>
-          {/* Style toggle (moved to header right) */}
-          <div className={`inline-flex rounded-full overflow-hidden border border-themeblue`}>
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              className={`px-2 py-0.5 text-[10px] font-semibold ${!useLightBg ? 'bg-themeblue text-white' : 'bg-transparent text-themeblue'}`}
-              onClick={() => setStylePref('dark')}
-            >Dark</button>
-            <button
-              type="button"
-              className={`px-2 py-0.5 text-[10px] font-semibold ${useLightBg ? 'bg-themeblue text-white' : 'bg-transparent text-themeblue'}`}
-              onClick={() => setStylePref('light')}
-            >Light</button>
+              onClick={() => {
+                setShowGBPValues((prev) => {
+                  const next = !prev;
+                  try { localStorage.setItem(SHOW_GBP_KEY, next ? '1' : '0'); } catch {}
+                  return next;
+                });
+              }}
+              className={
+                showGBPValues
+                  ? 'px-2 py-0.5 rounded text-[10px] font-semibold bg-themeblue text-white border border-themeblue'
+                  : 'px-2 py-0.5 rounded text-[10px] font-semibold bg-white text-themeblue border border-themeblue'
+              }
+            >
+              Show values in {showGBPValues ? 'native' : 'GBP'}
+            </button>
+
+            {/* Style toggle (header right) */}
+            <div className={`inline-flex rounded-full overflow-hidden border border-themeblue`}>
+              <button
+                type="button"
+                className={`px-2 py-0.5 text-[10px] font-semibold ${!useLightBg ? 'bg-themeblue text-white' : 'bg-transparent text-themeblue'}`}
+                onClick={() => setStylePref('dark')}
+              >Dark</button>
+              <button
+                type="button"
+                className={`px-2 py-0.5 text-[10px] font-semibold ${useLightBg ? 'bg-themeblue text-white' : 'bg-transparent text-themeblue'}`}
+                onClick={() => setStylePref('light')}
+              >Light</button>
+            </div>
           </div>
         </div>
       </div>
@@ -433,42 +482,55 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
         {sorted.map((h) => {
           const price = prices[h.ticker]?.price ?? 0;
           const mult = prices[h.ticker]?.price_multiplier ?? 1; // retained for unit price display
+          const displayCcy = showGBPValues ? 'GBP' : (h.currency || 'GBP');
+          const unitPriceDisplay = showGBPValues ? (price * mult) * rate(h.currency) : (price * mult);
           const mvGBP = mv(h) * rate(h.currency);
-          const unrealGBP = (mv(h) - h.total_cost) * rate(h.currency);
+          const mvNative = mv(h);
+          const unrealNative = mvNative - h.total_cost;
+          const unrealGBP = unrealNative * rate(h.currency);
           // Range-aware change using API-provided changes map
-          const changeValueGBP = rangeChanges[h.ticker] ?? 0;
-          const baseGBP = mvGBP - changeValueGBP;
-          const changePct = baseGBP > 0 ? (changeValueGBP / baseGBP) * 100 : null;
+          const changeValueGBP = rangeChangesGBP[h.ticker] ?? 0;
+          const changeValueNative = rangeChangesNative[h.ticker] ?? 0;
+          const changeValueDisplay = showGBPValues ? changeValueGBP : changeValueNative;
+          const baseDisplay = (showGBPValues ? mvGBP : mvNative) - changeValueDisplay;
+          const changePct = baseDisplay > 0 ? (changeValueDisplay / baseDisplay) * 100 : null;
           return (
             <div key={h.asset_id} className={`rounded-lg ${cardBgClass} px-3 py-2 flex items-center justify-between`}>
               <div className="flex items-center gap-3">
                 {/* Logo square; no rounding per request */}
-                {h.logo_url ? (
-                  <Image src={h.logo_url} alt="" width={36} height={36} className="bg-white border" />
-                ) : (
-                  <div className="w-9 h-9 bg-gray-800 border border-gray-700 flex items-center justify-center text-xs text-gray-400">
-                    {h.ticker.slice(0, 4)}
-                  </div>
-                )}
+                <LogoWithFallback
+                  src={h.logo_url || null}
+                  alt=""
+                  className="bg-white border w-9 h-9"
+                  fallback={
+                    <div className="w-9 h-9 bg-gray-800 border border-gray-700 flex items-center justify-center text-xs text-gray-200 font-bold">
+                      {(h.ticker || '').toUpperCase().slice(0, 4)}
+                    </div>
+                  }
+                />
                 <div>
                   <div className={`${primaryTextClass} font-semibold leading-tight`}>{h.ticker}</div>
-                  <div className={`text-xs ${secondaryTextClass} leading-tight`}>{displayUnits(h.total_shares)} @ {formatCurrency(price * mult, h.currency || 'GBP')}</div>
+                  <div className={`text-xs ${secondaryTextClass} leading-tight`}>
+                    {displayUnits(h.total_shares)} @ {formatCurrency(unitPriceDisplay, displayCcy)}
+                  </div>
                 </div>
               </div>
               <div className="text-right">
-                <div className={`${primaryTextClass} font-bold`}>{formatCurrency(mvGBP, 'GBP')}</div>
+                <div className={`${primaryTextClass} font-bold`}>
+                  {formatCurrency(showGBPValues ? mvGBP : mvNative, displayCcy)}
+                </div>
                 <div className="text-xs font-semibold mt-0.5">
-                  <span className={`${unrealGBP >= 0 ? LIGHT_BLUE_BADGE_POS : LIGHT_BLUE_BADGE_NEG}`}>
-                    {unrealGBP >= 0 ? '+' : '-'}{formatCurrency(Math.abs(unrealGBP), 'GBP')}
+                  <span className={`${(showGBPValues ? unrealGBP : unrealNative) >= 0 ? LIGHT_BLUE_BADGE_POS : LIGHT_BLUE_BADGE_NEG}`}>
+                    {(showGBPValues ? unrealGBP : unrealNative) >= 0 ? '+' : '-'}{formatCurrency(Math.abs(showGBPValues ? unrealGBP : unrealNative), displayCcy)}
                   </span>
                 </div>
                 <div className="text-xs mt-0.5 flex justify-end gap-1 flex-wrap">
                   <>
-                    <span className={`${changeValueGBP >= 0 ? LIGHT_BLUE_BADGE_POS : LIGHT_BLUE_BADGE_NEG}`}>
-                      {changeValueGBP >= 0 ? '+' : '-'}{formatCurrency(Math.abs(changeValueGBP), 'GBP')}
+                    <span className={`${changeValueDisplay >= 0 ? LIGHT_BLUE_BADGE_POS : LIGHT_BLUE_BADGE_NEG}`}>
+                      {changeValueDisplay >= 0 ? '+' : '-'}{formatCurrency(Math.abs(changeValueDisplay), displayCcy)}
                     </span>
                     {changePct !== null && isFinite(changePct) && (
-                      <span className={`${changeValueGBP >= 0 ? LIGHT_BLUE_BADGE_POS : LIGHT_BLUE_BADGE_NEG}`}>{Math.abs(changePct).toFixed(2)}%</span>
+                      <span className={`${changeValueDisplay >= 0 ? LIGHT_BLUE_BADGE_POS : LIGHT_BLUE_BADGE_NEG}`}>{Math.abs(changePct).toFixed(2)}%</span>
                     )}
                   </>
                 </div>

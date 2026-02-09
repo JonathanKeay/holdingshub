@@ -82,7 +82,19 @@ export default async function Dashboard() {
     .map((h) => ({
       ...h,
       currencySymbol: getCurrencySymbol(h.currency),
-      logo_url: h.logo_url || null,
+      logo_url: (() => {
+        const url = h.logo_url || null;
+        if (!url) return null;
+        const m0 = /^domain:(.+)$/i.exec(url);
+        if (m0 && m0[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m0[1])}`;
+        // If this is a Clearbit URL, extract domain and use server-side Logo.dev proxy when token is present
+        const m1 = /^https?:\/\/logo\.clearbit\.com\/(.+)$/i.exec(url);
+        if (m1 && m1[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m1[1])}`;
+        const m2 = /^https?:\/\/img\.logo\.dev\/(.+)$/i.exec(url);
+        if (m2 && m2[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m2[1])}`;
+        // Otherwise, proxy the original if it’s allowed
+        return `/api/logo-proxy?url=${encodeURIComponent(url)}`;
+      })(),
     }));
 
   const portfolios = portfoliosRaw.map(({ portfolio, holdings, cash_balances }) => ({
@@ -92,7 +104,17 @@ export default async function Dashboard() {
       .map((h) => ({
         ...h,
         currencySymbol: getCurrencySymbol(h.currency),
-        logo_url: h.logo_url || null,
+        logo_url: (() => {
+          const url = h.logo_url || null;
+          if (!url) return null;
+          const m0 = /^domain:(.+)$/i.exec(url);
+          if (m0 && m0[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m0[1])}`;
+          const m1 = /^https?:\/\/logo\.clearbit\.com\/(.+)$/i.exec(url);
+          if (m1 && m1[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m1[1])}`;
+          const m2 = /^https?:\/\/img\.logo\.dev\/(.+)$/i.exec(url);
+          if (m2 && m2[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m2[1])}`;
+          return `/api/logo-proxy?url=${encodeURIComponent(url)}`;
+        })(),
       })),
     cash_balances,
   }));

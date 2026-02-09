@@ -238,7 +238,7 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
         className="overflow-x-auto rounded border bg-white/50 dark:bg-transparent relative"
         onScroll={(e)=> setScrolled(e.currentTarget.scrollLeft>0)}
       >
-        {expanded && hasOverflow && scrolled && <div className="pointer-events-none absolute left-0 top-0 h-full w-4 bg-gradient-to-r from-black/25 to-transparent" />}
+        {expanded && hasOverflow && scrolled && <div className="pointer-events-none absolute left-0 top-0 h-full w-4 bg-linear-to-r from-black/25 to-transparent" />}
   <table id={`portfolio-table-${portfolio.id}`} className="w-full text-sm">
           {expanded && (
           <thead className="bg-themeblue text-white font-semibold border-b-2 border-themeblue-hover">
@@ -292,15 +292,14 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
                 <tr key={h.asset_id} className="border-t text-s align-middle">
                   <td className="p-1 align-middle sticky left-0 z-10 bg-white">
                     <div className="flex items-center">
-                      {h.logo_url && (
-                        <LogoWithFallback
-                          src={h.logo_url}
-                          alt={`${h.ticker} logo`}
-                          className="h-8 w-8 rounded bg-white border mr-1"
-                          loading="lazy"
-                          decoding="async"
-                        />
-                      )}
+                      <LogoWithFallback
+                        src={h.logo_url || null}
+                        alt={`${h.ticker} logo`}
+                        className="h-8 w-8 rounded bg-white border mr-1"
+                        loading="lazy"
+                        decoding="async"
+                        fallback={<span className="flex items-center justify-center h-8 w-8 rounded bg-themeblue border mr-1 text-white text-xs font-bold tracking-wide">{(h.ticker || '').toUpperCase().slice(0,3)}</span>}
+                      />
                       <div>
                         <div className={`${THEME_BLUE_TEXT} font-bold`}>{h.ticker}</div>
                         <div className="text-xs text-gray-500">{h.company_name || h.ticker}</div>
@@ -373,13 +372,13 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
             <tr className={`${THEME_BLUE_DISABLED_BG} row-compact font-semibold border-t text-base`}>
               <td className="p-1 text-right" colSpan={2}>TOTAL ASSETS</td>
               <td className="p-1 text-right font-bold">
-                <span className={totalChangeInBase >= 0 ? 'text-[var(--color-tgreen)]' : 'text-[var(--color-tred)]'}>
+                <span className={totalChangeInBase >= 0 ? 'text-(--color-tgreen)' : 'text-(--color-tred)'}>
                   {formatCurrency(Math.abs(totalChangeInBase), baseCurrency)}
                 </span>
               </td>
               <td className="p-1 text-left">
                 {totalChangePercent !== 0 ? (
-                  <span className={`font-bold ${totalChangePercent > 0 ? 'text-[var(--color-tgreen)]' : 'text-[var(--color-tred)]'}`}>
+                  <span className={`font-bold ${totalChangePercent > 0 ? 'text-(--color-tgreen)' : 'text-(--color-tred)'}`}>
                     {totalChangePercent > 0 ? '+' : ''}
                     {Math.abs(totalChangePercent).toFixed(2)}%
                   </span>
@@ -389,12 +388,12 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
               </td>
               <td className="p-1 text-right">{formatCurrency(totalCostInBase, baseCurrency)}</td>
               <td className="p-1 text-right font-bold">
-                <span className={totalMarketValueInBase >= 0 ? 'text-[var(--color-tgreen)]' : 'text-[var(--color-tred)]'}>
+                <span className={totalMarketValueInBase >= 0 ? 'text-(--color-tgreen)' : 'text-(--color-tred)'}>
                   {formatCurrency(Math.abs(totalMarketValueInBase), baseCurrency)}
                 </span>
               </td>
               <td className="p-1 text-left">
-                <span className={totalProfitLossInBase >= 0 ? 'text-[var(--color-tgreen)]' : 'text-[var(--color-tred)]'}>
+                <span className={totalProfitLossInBase >= 0 ? 'text-(--color-tgreen)' : 'text-(--color-tred)'}>
                   {formatCurrency(Math.abs(totalProfitLossInBase), baseCurrency)}
                 </span>
               </td>

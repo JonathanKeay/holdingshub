@@ -20,9 +20,14 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 *.log
+.pnpm-store/
 .cache/
 .vscode/.cache/
 .turbo/
+
+# Local timestamped backups
+Dockerfile.bak.*
+docker-compose*.yml.bak.*
 
 # OS / editor junk
 .DS_Store
