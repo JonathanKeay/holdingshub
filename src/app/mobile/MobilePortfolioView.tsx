@@ -47,6 +47,7 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
   const [sortBy, setSortBy] = useState<SortKey>('alphabetical');
   const [range, setRange] = useState<'1D'|'1W'|'1M'|'YTD'|'1Y'|'ALL'>('1D');
   const [showGBPValues, setShowGBPValues] = useState<boolean>(false);
+  const [hideTotals, setHideTotals] = useState<boolean>(false);
   const RANGE_KEY = 'mobileRangePrefV1';
   const SORT_KEY = 'mobileSortPrefV1';
   const SHOW_GBP_KEY = 'mobileShowGBPValuesV1';
@@ -368,7 +369,35 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
       {/* Header totals */}
       <div>
         <div className="text-themeblue/80 text-xs font-semibold">Total Worth</div>
-  <div className={`text-4xl font-extrabold ${useLightBg ? 'text-themeblue-disabled' : 'text-themeblue'}`}>{formatCurrency(Math.round(totalGBP), 'GBP').replace(/\.00$/, '')}</div>
+        <div className="flex items-center gap-2">
+          {!hideTotals && (
+            <div className={`text-4xl font-extrabold ${useLightBg ? 'text-themeblue-disabled' : 'text-themeblue'}`}>
+              {formatCurrency(Math.round(totalGBP), 'GBP').replace(/\.00$/, '')}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => setHideTotals((v) => !v)}
+            aria-label={hideTotals ? 'Show values' : 'Hide values'}
+            className={`${useLightBg ? 'text-themeblue-disabled' : 'text-themeblue'} p-1`}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" />
+              <circle cx="12" cy="12" r="3" />
+              {hideTotals && <path d="M3 3l18 18" />}
+            </svg>
+          </button>
+        </div>
         <div className="mt-1 flex items-center justify-between">
           <div className={`text-sm font-semibold ${headerChangeGBP >= 0 ? 'text-tgreen' : 'text-tred'}`}>
             {headerChangeGBP === 0 ? '0' : (headerChangeGBP > 0 ? '+' : '-')}
@@ -387,24 +416,6 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setShowGBPValues((prev) => {
-                  const next = !prev;
-                  try { localStorage.setItem(SHOW_GBP_KEY, next ? '1' : '0'); } catch {}
-                  return next;
-                });
-              }}
-              className={
-                showGBPValues
-                  ? 'px-2 py-0.5 rounded text-[10px] font-semibold bg-themeblue text-white border border-themeblue'
-                  : 'px-2 py-0.5 rounded text-[10px] font-semibold bg-white text-themeblue border border-themeblue'
-              }
-            >
-              Show values in {showGBPValues ? 'native' : 'GBP'}
-            </button>
-
             {/* Style toggle (header right) */}
             <div className={`inline-flex rounded-full overflow-hidden border border-themeblue`}>
               <button
@@ -453,28 +464,47 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
         ))}
       </div>
 
-        {/* Sort control */}
-        <div className="flex items-center justify-end">
-          <label className={`mr-2 ${sortLabelTextClass}`}>Sort</label>
-          <select
-            className={`bg-transparent border ${selectBorderClass} rounded px-2 py-1 text-sm ${useLightBg ? 'text-themeblue-disabled' : 'text-themeblue'}`}
-            value={sortBy}
-            onChange={(e) => {
-              const v = e.target.value as SortKey;
-              setSortBy(v);
-              try { localStorage.setItem(SORT_KEY, v); } catch {}
+        {/* Sort control + GBP toggle */}
+        <div className="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setShowGBPValues((prev) => {
+                const next = !prev;
+                try { localStorage.setItem(SHOW_GBP_KEY, next ? '1' : '0'); } catch {}
+                return next;
+              });
             }}
+            className={
+              showGBPValues
+                ? 'px-2 py-0.5 rounded text-[10px] font-semibold bg-themeblue text-white border border-themeblue'
+                : 'px-2 py-0.5 rounded text-[10px] font-semibold bg-white text-themeblue border border-themeblue'
+            }
           >
-            {SORT_OPTIONS.map((o) => (
-              <option
-                key={o.key}
-                value={o.key}
-                className={`${useLightBg ? 'text-themeblue-disabled' : 'text-themeblue'}`}
-              >
-                {o.label}
-              </option>
-            ))}
-          </select>
+            Show values in {showGBPValues ? 'native' : 'GBP'}
+          </button>
+          <div className="flex items-center">
+            <label className={`mr-2 ${sortLabelTextClass}`}>Sort</label>
+            <select
+              className={`bg-transparent border ${selectBorderClass} rounded px-2 py-1 text-sm ${useLightBg ? 'text-themeblue-disabled' : 'text-themeblue'}`}
+              value={sortBy}
+              onChange={(e) => {
+                const v = e.target.value as SortKey;
+                setSortBy(v);
+                try { localStorage.setItem(SORT_KEY, v); } catch {}
+              }}
+            >
+              {SORT_OPTIONS.map((o) => (
+                <option
+                  key={o.key}
+                  value={o.key}
+                  className={`${useLightBg ? 'text-themeblue-disabled' : 'text-themeblue'}`}
+                >
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
       {/* List */}
@@ -516,9 +546,11 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
                 </div>
               </div>
               <div className="text-right">
-                <div className={`${primaryTextClass} font-bold`}>
-                  {formatCurrency(showGBPValues ? mvGBP : mvNative, displayCcy)}
-                </div>
+                {!hideTotals && (
+                  <div className={`${primaryTextClass} font-bold`}>
+                    {formatCurrency(showGBPValues ? mvGBP : mvNative, displayCcy)}
+                  </div>
+                )}
                 <div className="text-xs font-semibold mt-0.5">
                   <span className={`${(showGBPValues ? unrealGBP : unrealNative) >= 0 ? LIGHT_BLUE_BADGE_POS : LIGHT_BLUE_BADGE_NEG}`}>
                     {(showGBPValues ? unrealGBP : unrealNative) >= 0 ? '+' : '-'}{formatCurrency(Math.abs(showGBPValues ? unrealGBP : unrealNative), displayCcy)}
