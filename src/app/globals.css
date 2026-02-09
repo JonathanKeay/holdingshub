@@ -40,8 +40,19 @@
   --color-error: #d64545;               /* For warnings, negative values */
 }
 
+:root[data-theme='light'] {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+:root[data-theme='dark'] {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]),
+  :root[data-theme='system'] {
     --background: #0a0a0a;
     --foreground: #ededed;
   }

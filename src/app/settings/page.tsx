@@ -22,6 +22,7 @@ export default function SettingsPage() {
   const [showZero, setShowZero] = useState(true);
   const [visibleStatuses, setVisibleStatuses] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [theme, setTheme] = useState<'system' | 'light' | 'dark'>('system');
 
   useEffect(() => {
     const load = async () => {
@@ -33,11 +34,33 @@ export default function SettingsPage() {
       if (data) {
         setShowZero(!!data.show_zero_holdings);
         setVisibleStatuses(data.visible_statuses ?? ['active']);
+        const t = data?.portfolio_prefs?.theme;
+        if (t === 'system' || t === 'light' || t === 'dark') setTheme(t);
       }
       setLoading(false);
     };
     load();
   }, []);
+
+  const updateTheme = async (value: 'system' | 'light' | 'dark') => {
+    setTheme(value);
+    try {
+      await fetch('/api/portfolio-prefs', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ theme: value }),
+      });
+    } catch {
+      // ignore
+    }
+    try {
+      localStorage.setItem('uiThemePrefV1', value);
+    } catch {}
+    // Apply immediately without a refresh
+    try {
+      document.documentElement.setAttribute('data-theme', value);
+    } catch {}
+  };
 
   const updateShowZero = async (value: boolean) => {
     setShowZero(value);
@@ -82,6 +105,40 @@ export default function SettingsPage() {
         </div>
         <p className="mt-2 text-xs text-gray-500">
           Toggle whether assets with zero units are visible on the dashboard.
+        </p>
+      </section>
+
+      {/* Theme */}
+      <section className="border rounded-md p-4 space-y-2">
+        <Label className={`${THEME_BLUE_TEXT} block text-sm font-medium`}>Theme</Label>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => updateTheme('system')}
+            className={`${BTN_BASE} ${theme === 'system' ? BTN_PRIMARY : BTN_GHOST} ${BTN_MD}`}
+          >
+            System
+          </button>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => updateTheme('light')}
+            className={`${BTN_BASE} ${theme === 'light' ? BTN_PRIMARY : BTN_GHOST} ${BTN_MD}`}
+          >
+            Light
+          </button>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => updateTheme('dark')}
+            className={`${BTN_BASE} ${theme === 'dark' ? BTN_PRIMARY : BTN_GHOST} ${BTN_MD}`}
+          >
+            Dark
+          </button>
+        </div>
+        <p className="text-xs text-gray-500">
+          Choose an app theme that stays consistent across desktop and mobile.
         </p>
       </section>
 

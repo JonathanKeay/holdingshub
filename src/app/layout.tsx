@@ -4,6 +4,7 @@ import "./globals.css";
 import { Sidebar } from "@/components/Sidebar";
 import PortfolioLayoutApplier from './PortfolioLayoutApplier';
 import { Suspense } from 'react';
+import ThemeApplier from '@/components/ThemeApplier';
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -34,6 +35,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+        <Suspense fallback={null}>
+          <ThemeApplier />
+        </Suspense>
         <div className="flex h-screen">
           <Sidebar />
           <main className="flex-1 overflow-y-auto">{children}</main>
