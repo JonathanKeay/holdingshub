@@ -63,6 +63,19 @@ Use `docker compose run --rm app node scripts/refreshPrices.js` etc. Ensure requ
 - Non‑US tickers are polled via Yahoo roughly every 5 minutes.
 - The UI also polls a lightweight version endpoint (default 15s on the dashboard) and will refresh when any tracked ticker updates.
 
+### Manual logo overrides (when a ticker icon won’t load)
+
+HoldingsHub stores logos in Supabase `assets.logo_url`.
+
+- Normal/automatic mode uses a domain marker: `domain:example.com`.
+- If you want to permanently override a bad/incorrect domain (e.g. Logo.dev expects a different hostname), prefix the value with `manual:`.
+
+Examples:
+
+- `manual:domain:cheesecakefactory.com`
+
+Any `logo_url` starting with `manual:` is treated as locked and will not be overwritten by `/api/update-logos` or the Finnhub/domain logo refresh scripts.
+
 ## Development with Docker Compose
 
 For a dev LXC where you want hot reload and the price streamer running inside containers:
