@@ -481,7 +481,7 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
                 : 'px-2 py-0.5 rounded text-[10px] font-semibold bg-white text-themeblue border border-themeblue'
             }
           >
-            Show values in {showGBPValues ? 'native' : 'GBP'}
+            <span className={showGBPValues ? 'font-extrabold' : 'font-semibold'}>GBP</span>
           </button>
           <div className="flex items-center">
             <label className={`mr-2 ${sortLabelTextClass}`}>Sort</label>
