@@ -5,6 +5,7 @@ import { Sidebar } from "@/components/Sidebar";
 import PortfolioLayoutApplier from './PortfolioLayoutApplier';
 import { Suspense } from 'react';
 import ThemeApplier from '@/components/ThemeApplier';
+import { getSupabaseServerClient } from '@/lib/supabase-server';
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -27,13 +28,40 @@ export const metadata: Metadata = {
   ),
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // If we can determine the theme server-side, set it on <html> so Safari/iOS
+  // renders the correct background immediately (no dependence on client hydration).
+  // Falls back gracefully to system theme when unknown.
+  // Note: settings are stored in settings.portfolio_prefs for now.
+  const getServerTheme = async () => {
+    try {
+      const supabase = await getSupabaseServerClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) return null;
+
+      const { data } = await supabase
+        .from('settings')
+        .select('portfolio_prefs')
+        .eq('id', 'global')
+        .single();
+
+      const t = (data as any)?.portfolio_prefs?.theme;
+      if (t === 'system' || t === 'light' || t === 'dark') return t as 'system' | 'light' | 'dark';
+      return 'system';
+    } catch {
+      return null;
+    }
+  };
+
+  const serverTheme = await getServerTheme();
   return (
-    <html lang="en">
+    <html lang="en" data-theme={serverTheme ?? undefined}>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <Suspense fallback={null}>
           <ThemeApplier />
