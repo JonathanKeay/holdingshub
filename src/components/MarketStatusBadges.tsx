@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { DateTime } from 'luxon';
 import { POSITIVE_BADGE, NEGATIVE_BADGE, THEME_BLUE_DISABLED_BG } from '@/lib/uiColors';
 import { isMarketHoliday } from '@/lib/marketHolidays';
+import { formatDurationDHM } from '@/lib/utils';
 
 type MarketCode = 'UK' | 'US';
 
@@ -57,7 +58,7 @@ function computeSession(m: MarketDef, nowUtc: DateTime): SessionStatus {
       code: m.code,
       label: m.label,
       phase: 'closed',
-      note: `Opens in ${mins}m`,
+      note: `Opens in ${formatDurationDHM(mins)}`,
       nextEvent: { type: 'opens', atISO: nextOpen.toISO()!, minutes: mins },
     };
   }
@@ -72,7 +73,7 @@ function computeSession(m: MarketDef, nowUtc: DateTime): SessionStatus {
       code: m.code,
       label: m.label,
       phase: 'closed',
-      note: `Opens in ${mins}m`,
+      note: `Opens in ${formatDurationDHM(mins)}`,
       nextEvent: { type: 'opens', atISO: openDT.toISO()!, minutes: mins },
     };
   }
@@ -83,7 +84,7 @@ function computeSession(m: MarketDef, nowUtc: DateTime): SessionStatus {
       code: m.code,
       label: m.label,
       phase: 'pre',
-      note: `Opens in ${mins}m`,
+      note: `Opens in ${formatDurationDHM(mins)}`,
       nextEvent: { type: 'opens', atISO: openDT.toISO()!, minutes: mins },
     };
   }
@@ -94,7 +95,7 @@ function computeSession(m: MarketDef, nowUtc: DateTime): SessionStatus {
       code: m.code,
       label: m.label,
       phase: 'open',
-      note: `Closes in ${mins}m`,
+      note: `Closes in ${formatDurationDHM(mins)}`,
       nextEvent: { type: 'closes', atISO: closeDT.toISO()!, minutes: mins },
     };
   }
@@ -105,7 +106,7 @@ function computeSession(m: MarketDef, nowUtc: DateTime): SessionStatus {
       code: m.code,
       label: m.label,
       phase: 'post',
-      note: `Post · ${mins}m left`,
+      note: `Post · ${formatDurationDHM(mins)} left`,
     };
   }
 
@@ -119,7 +120,7 @@ function computeSession(m: MarketDef, nowUtc: DateTime): SessionStatus {
     code: m.code,
     label: m.label,
     phase: 'closed',
-    note: `Opens in ${mins}m`,
+    note: `Opens in ${formatDurationDHM(mins)}`,
     nextEvent: { type: 'opens', atISO: nextOpen.toISO()!, minutes: mins },
   };
 }

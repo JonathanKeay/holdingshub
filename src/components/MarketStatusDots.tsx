@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DateTime } from 'luxon';
 import { isMarketHoliday } from '@/lib/marketHolidays';
+import { formatDurationDHM } from '@/lib/utils';
 
 type MarketCode = 'UK' | 'US';
 
@@ -51,15 +52,6 @@ function minutesUntil(a: DateTime, b: DateTime) {
   return Math.max(0, Math.round(a.diff(b, 'minutes').minutes));
 }
 
-function formatHM(totalMinutes: number) {
-  const mins = Math.max(0, Math.round(totalMinutes));
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  if (h <= 0) return `${m}m`;
-  if (m === 0) return `${h}h`;
-  return `${h}h ${m}m`;
-}
-
 function computeNextOpen(m: MarketDef, nowMarket: DateTime): DateTime {
   const isWeekend = (d: number) => d === 6 || d === 7;
   let dayOffset = 0;
@@ -100,15 +92,15 @@ function phaseFor(m: MarketDef, nowUTC: DateTime): Session {
   if (weekend) return { code: m.code, label: m.label, phase: 'closed', note: 'Weekend', nextOpen: computeNextOpen(m, now) };
 
   if (now < pre) {
-    return { code: m.code, label: m.label, phase: 'closed', note: `Opens in ${formatHM(minutesUntil(open, now))}`, nextOpen: open };
+    return { code: m.code, label: m.label, phase: 'closed', note: `Opens in ${formatDurationDHM(minutesUntil(open, now))}`, nextOpen: open };
   }
   if (now >= pre && now < open) {
-    return { code: m.code, label: m.label, phase: 'pre', note: `Opens in ${formatHM(minutesUntil(open, now))}`, nextOpen: open };
+    return { code: m.code, label: m.label, phase: 'pre', note: `Opens in ${formatDurationDHM(minutesUntil(open, now))}`, nextOpen: open };
   }
   if (now >= open && now < close) {
     // Next open is next trading day, not today's close
     const nextOpen = computeNextOpen(m, now.plus({ minutes: 1 }));
-    return { code: m.code, label: m.label, phase: 'open', note: `Closes in ${formatHM(minutesUntil(close, now))}`, nextOpen };
+    return { code: m.code, label: m.label, phase: 'open', note: `Closes in ${formatDurationDHM(minutesUntil(close, now))}`, nextOpen };
   }
   if (now >= close && now < post) {
     const nextOpen = computeNextOpen(m, now.plus({ minutes: 1 }));
@@ -116,7 +108,7 @@ function phaseFor(m: MarketDef, nowUTC: DateTime): Session {
   }
 
   const nextOpen = computeNextOpen(m, now.plus({ minutes: 1 }));
-  return { code: m.code, label: m.label, phase: 'closed', note: `Opens in ${formatHM(minutesUntil(nextOpen, now))}`, nextOpen };
+  return { code: m.code, label: m.label, phase: 'closed', note: `Opens in ${formatDurationDHM(minutesUntil(nextOpen, now))}`, nextOpen };
 }
 
 interface Props {
