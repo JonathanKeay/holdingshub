@@ -138,7 +138,7 @@ export default function MarketStatusDots({ tickers, refreshMs = 60_000 }: Props)
       case 'open': return 'bg-[var(--color-tgreen)] shadow-[0_0_0_2px_rgba(0,0,0,0.15)]';
       case 'pre': return 'bg-yellow-400 animate-pulse shadow-[0_0_0_2px_rgba(0,0,0,0.1)]';
       case 'post': return 'bg-yellow-600 shadow-[0_0_0_2px_rgba(0,0,0,0.15)]';
-      case 'holiday': return 'bg-blue-300 shadow-[0_0_0_2px_rgba(0,0,0,0.05)]';
+      case 'holiday': return 'bg-accent shadow-[0_0_0_2px_rgba(0,0,0,0.05)]';
       case 'closed':
       default: return 'bg-[var(--color-tred)] opacity-70 shadow-[0_0_0_2px_rgba(0,0,0,0.05)]';
     }
@@ -153,7 +153,7 @@ export default function MarketStatusDots({ tickers, refreshMs = 60_000 }: Props)
         return (
           <span
             key={s.code}
-            className="flex items-center gap-1 text-[11px] text-gray-600 font-medium select-none"
+            className="flex items-center gap-1 text-[11px] text-foreground/70 font-medium select-none"
             title={tooltip}
           >
             <span>{s.label}</span>

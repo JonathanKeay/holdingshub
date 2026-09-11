@@ -69,8 +69,6 @@ export default async function MobilePage() {
       if (!url) return null;
       const m0 = /^domain:(.+)$/i.exec(url);
       if (m0 && m0[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m0[1])}${logoProxyExtras}`;
-      const m1 = /^https?:\/\/logo\.clearbit\.com\/(.+)$/i.exec(url);
-      if (m1 && m1[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m1[1])}${logoProxyExtras}`;
       const m2 = /^https?:\/\/img\.logo\.dev\/(.+)$/i.exec(url);
       if (m2 && m2[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m2[1])}${logoProxyExtras}`;
       return `/api/logo-proxy?url=${encodeURIComponent(url)}`;
@@ -115,7 +113,7 @@ export default async function MobilePage() {
   }, 0);
 
   return (
-    <main className="p-4 w-full max-w-[100vw] overflow-x-hidden">
+    <main className="p-4 w-full max-w-[100vw] overflow-x-hidden min-h-screen bg-background text-foreground">
       <h1 className="text-xl font-semibold mb-2">All Portfolios</h1>
       <div className="mb-3 space-y-1">
         <MarketStatusBadges tickers={allTickersSorted} />

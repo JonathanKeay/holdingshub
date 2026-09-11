@@ -16,7 +16,7 @@ const BTN_MD = 'text-sm px-3.5 py-2';
 const BTN_PRIMARY =
   'bg-themeblue text-white border border-themeblue-hover hover:bg-themeblue-hover shadow-sm focus-visible:ring-themeblue';
 const BTN_GHOST =
-  `${THEME_BLUE_TEXT} border border-themeblue-hover hover:bg-Thoverlight-tint focus-visible:ring-themeblue`;
+  `${THEME_BLUE_TEXT} border border-Tdivider hover:bg-Thoverlight-tint focus-visible:ring-themeblue`;
 
 export default function SettingsPage() {
   const [showZero, setShowZero] = useState(true);
@@ -96,21 +96,21 @@ export default function SettingsPage() {
       </nav>
 
       {/* Show Zero Holdings */}
-      <section className="border rounded-md p-4">
+      <section className="border border-Tdivider rounded-md p-4 bg-gray-back-fixed">
         <div className="flex items-center justify-between">
-          <Label htmlFor="show-zero" className={`${THEME_BLUE_TEXT} font-medium`}>
+          <Label htmlFor="show-zero" className="text-Tdark-shade font-medium">
             Show tickers with zero holdings
           </Label>
           <Switch id="show-zero" checked={showZero} onCheckedChange={updateShowZero} disabled={loading} />
         </div>
-        <p className="mt-2 text-xs text-gray-500">
+        <p className="mt-2 text-xs text-Tdark-shade/70">
           Toggle whether assets with zero units are visible on the dashboard.
         </p>
       </section>
 
       {/* Theme */}
-      <section className="border rounded-md p-4 space-y-2">
-        <Label className={`${THEME_BLUE_TEXT} block text-sm font-medium`}>Theme</Label>
+      <section className="border border-Tdivider rounded-md p-4 space-y-2 bg-gray-back-fixed">
+        <Label className="text-Tdark-shade block text-sm font-medium">Theme</Label>
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -137,14 +137,14 @@ export default function SettingsPage() {
             Dark
           </button>
         </div>
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-Tdark-shade/70">
           Choose an app theme that stays consistent across desktop and mobile.
         </p>
       </section>
 
       {/* Status visibility */}
-      <section className="border rounded-md p-4 space-y-3">
-        <Label className={`${THEME_BLUE_TEXT} block text-sm font-medium`}>
+      <section className="border border-Tdivider rounded-md p-4 space-y-3 bg-themeblue-bg">
+        <Label className="text-foreground block text-sm font-medium">
           Asset statuses to include on dashboard
         </Label>
 
@@ -165,7 +165,7 @@ export default function SettingsPage() {
           })}
         </div>
 
-        <div className={`${THEME_BLUE_DISABLED_BG} rounded px-3 py-2 text-xs text-gray-600`}>
+        <div className={`${THEME_BLUE_DISABLED_BG} rounded px-3 py-2 text-xs`}>
           Changes are saved instantly and applied to your dashboard.
         </div>
       </section>
@@ -175,10 +175,12 @@ export default function SettingsPage() {
         <li>
           <Link
             href="/settings/portfolio-layout"
-            className="block border rounded-md px-3 py-2 hover:bg-Thoverlight-tint border-themeblue-hover"
+            className="block border border-Tdivider rounded-md px-3 py-2 hover:bg-Thoverlight-tint bg-themeblue-bg"
           >
             <div className={`${THEME_BLUE_TEXT} font-semibold`}>Portfolio layout</div>
-            <div className="text-sm text-gray-500">Reorder or hide portfolios for the dashboard.</div>
+            <div className="text-sm text-foreground/60">
+              Reorder or hide portfolios for the dashboard.
+            </div>
           </Link>
         </li>
         {/* Add more settings tiles here as needed */}

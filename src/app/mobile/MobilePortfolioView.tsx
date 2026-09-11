@@ -4,9 +4,11 @@ import { useMemo, useState, useCallback, useEffect } from 'react';
 import { LogoWithFallback } from '@/components/LogoWithFallback';
 import type { Holding } from '@/lib/queries';
 import { formatCurrency } from '@/lib/formatCurrency';
-// Mobile-specific badges: red/green text on a light blue background for contrast on dark cards
-const LIGHT_BLUE_BADGE_POS = 'inline-block rounded px-1 font-bold text-tgreen bg-Thoverlight-tint';
-const LIGHT_BLUE_BADGE_NEG = 'inline-block rounded px-1 font-bold text-tred bg-Thoverlight-tint';
+// Mobile badges per spec
+// - Red text #c62828 on background #ca9e9e
+// - Green badge uses background #2e7d32 with white text
+const BADGE_POS = 'inline-block rounded px-1 font-bold text-white bg-[var(--color-tgreen-badge-bg)]';
+const BADGE_NEG = 'inline-block rounded px-1 font-bold text-tred bg-[var(--color-tred-badge-bg)]';
 
 type PriceMap = Record<string, { price: number; previous_close?: number; price_multiplier: number }>; 
 
@@ -51,47 +53,6 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
   const RANGE_KEY = 'mobileRangePrefV1';
   const SORT_KEY = 'mobileSortPrefV1';
   const SHOW_GBP_KEY = 'mobileShowGBPValuesV1';
-  // Detect device theme and default styles for contrast
-  // useLightBg=true -> lighter blue surfaces/text; false -> dark blue cards with white text
-  // Default to dark style on first load
-  const [useLightBg, setUseLightBg] = useState<boolean>(false);
-  // Persisted user preference: 'light' | 'dark' | null (null = follow device, but we default dark)
-  const STORAGE_KEY = 'mobileStylePrefV1';
-  const [userPref, setUserPref] = useState<'light' | 'dark' | null>(null);
-
-  // Load saved preference (if any)
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved === 'light' || saved === 'dark') {
-        setUserPref(saved);
-        setUseLightBg(saved === 'light');
-      }
-    } catch {}
-  }, []);
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return;
-    // If user has explicitly chosen a preference, ignore device changes
-    if (userPref) return;
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const apply = () => setUseLightBg(!mq.matches); // dark mode => dark surfaces; light mode => light surfaces
-    try {
-      if (mq.addEventListener) mq.addEventListener('change', apply);
-      else mq.addListener(apply);
-      return () => {
-        if (mq.removeEventListener) mq.removeEventListener('change', apply);
-        else mq.removeListener(apply);
-      };
-    } catch {}
-  }, [userPref]);
-
-  // Helper to set and persist explicit style choice
-  const setStylePref = useCallback((pref: 'light' | 'dark') => {
-    setUserPref(pref);
-    setUseLightBg(pref === 'light');
-    try { localStorage.setItem(STORAGE_KEY, pref); } catch {}
-  }, []);
 
   const rate = useCallback((ccy?: string) => fxRates[(ccy || 'GBP').toUpperCase()] ?? 1, [fxRates]);
   const mv = useCallback((h: Holding) => {
@@ -234,8 +195,48 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
     };
     const yAt = (v: number) => height - pad - ((v - minY) * (height - 2 * pad)) / spanY;
     const path = data.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xAt(i).toFixed(2)} ${yAt(p.value_gbp).toFixed(2)}`).join(' ');
-    const stroke = useLightBg ? 'var(--color-themeblue)' : 'white';
-    const fill = useLightBg ? 'rgba(0, 97, 154, 0.15)' : 'rgba(255, 255, 255, 0.12)';
+    // Chart line uses the accent blue (#3cb4e7)
+    const stroke = 'var(--color-accent)';
+    const fill = 'rgba(60, 180, 231, 0.20)';
+
+    // Chart background per spec:
+    // - 1W: alternating day columns (#dcdee0 / #ffffff)
+    // - 1M+ (1M/YTD/1Y/ALL): solid grey (#dcdee0)
+    // - 1D: solid grey
+    const bgRects = (() => {
+      const rects: Array<{ x: number; w: number; fill: string }> = [];
+      const grey = 'var(--color-gray-back-fixed)';
+      const white = '#ffffff';
+
+      if (range === '1W') {
+        const dayKey = (iso: string) => String(iso).slice(0, 10);
+        const keys = data.map(p => dayKey(p.date));
+        const segments: Array<{ start: number; end: number }> = [];
+        let start = 0;
+        for (let i = 1; i < keys.length; i++) {
+          if (keys[i] !== keys[i - 1]) {
+            segments.push({ start, end: i - 1 });
+            start = i;
+          }
+        }
+        segments.push({ start, end: keys.length - 1 });
+
+        for (let s = 0; s < segments.length; s++) {
+          const seg = segments[s];
+          const startX = seg.start === 0 ? pad : (xAt(seg.start - 1) + xAt(seg.start)) / 2;
+          const endX = seg.end === n - 1 ? (width - pad) : (xAt(seg.end) + xAt(seg.end + 1)) / 2;
+          const w = Math.max(0, endX - startX);
+          rects.push({ x: startX, w, fill: s % 2 === 0 ? grey : white });
+        }
+        return rects;
+      }
+
+      // Solid grey for 1D and >= 1M ranges
+      if (range === '1D' || range === '1M' || range === 'YTD' || range === '1Y' || range === 'ALL') {
+        rects.push({ x: 0, w: width, fill: grey });
+      }
+      return rects;
+    })();
     // Area under curve
     const area = `${path} L ${xAt(n - 1).toFixed(2)} ${height - pad} L ${xAt(0).toFixed(2)} ${height - pad} Z`;
     const [hover, setHover] = useState<number | null>(null);
@@ -270,8 +271,8 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
     const onLeave = () => setHover(null);
   const hoverX = hover != null ? xAt(hover) : null;
   const hoverY = hover != null ? yAt(data[hover].value_gbp) : null;
-    const tooltipBg = useLightBg ? 'white' : 'rgba(0,0,0,0.8)';
-    const tooltipText = useLightBg ? 'black' : 'white';
+    const tooltipBg = '#ffffff';
+    const tooltipText = '#111a2e';
   const dt = hover != null ? new Date(data[hover].date) : null;
   const when = dt ? (range === '1D' ? dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : dt.toLocaleDateString()) : '';
   const label = hover != null ? `${when} • ${formatCurrency(data[hover].value_gbp, 'GBP')}` : '';
@@ -292,6 +293,9 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
         onTouchMove={(e) => { if (e.touches[0]) onMove(e.touches[0].clientX, e.currentTarget); }}
         onTouchEnd={onLeave}
       > 
+        {bgRects.map((r, i) => (
+          <rect key={i} x={r.x} y={0} width={r.w} height={height} fill={r.fill} />
+        ))}
         <path d={area} fill={fill} />
         <path d={path} fill="none" stroke={stroke} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
         {hover != null && hoverX != null && hoverY != null && (
@@ -355,23 +359,22 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
   const headerBaselineGBP = chartBaselineGBP ?? Math.max(0, totalGBP - headerChangeGBP);
   const headerChangePct = headerBaselineGBP > 0 ? (headerChangeGBP / headerBaselineGBP) * 100 : 0;
 
-  // Style helpers for previewing lighter background everywhere
-  const cardBgClass = useLightBg ? 'bg-themeblue-disabled-bg' : 'bg-themeblue';
-  const chartBgClass = cardBgClass;
-  const primaryTextClass = useLightBg ? 'text-themeblue' : 'text-white';
-  const secondaryTextClass = useLightBg ? 'text-themeblue/80' : 'text-gray-400';
-  // Sort label flips color like the select and total worth amount for consistency, with subtle opacity
-  const sortLabelTextClass = `text-xs font-semibold ${useLightBg ? 'text-themeblue-disabled/80' : 'text-themeblue/80'}`;
-  const selectBorderClass = useLightBg ? 'border-themeblue' : 'border-themeblue';
+  // Surfaces per spec
+  // - App background/text is controlled by CSS vars (background/foreground)
+  // - Menu bar and asset tiles are always themeblue (#247372)
+  const cardBgClass = 'bg-themeblue';
+  const chartBgClass = 'bg-transparent';
+  const sortLabelTextClass = 'text-xs font-semibold text-foreground/70';
+  const selectBorderClass = 'border-accent';
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 text-foreground">
       {/* Header totals */}
       <div>
-        <div className="text-themeblue/80 text-xs font-semibold">Total Worth</div>
+        <div className="text-foreground/70 text-xs font-semibold">Total Worth</div>
         <div className="flex items-center gap-2">
           {!hideTotals && (
-            <div className={`text-4xl font-extrabold ${useLightBg ? 'text-themeblue-disabled' : 'text-themeblue'}`}>
+            <div className="text-4xl font-extrabold text-foreground">
               {formatCurrency(Math.round(totalGBP), 'GBP').replace(/\.00$/, '')}
             </div>
           )}
@@ -379,7 +382,7 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
             type="button"
             onClick={() => setHideTotals((v) => !v)}
             aria-label={hideTotals ? 'Show values' : 'Hide values'}
-            className={`${useLightBg ? 'text-themeblue-disabled' : 'text-themeblue'} p-1`}
+            className="text-foreground p-1"
           >
             <svg
               viewBox="0 0 24 24"
@@ -411,32 +414,20 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
             >
               {Math.abs(headerChangePct).toFixed(2)}%
             </span>
-            <span className="ml-2 px-1 py-0.5 rounded text-xs font-semibold text-themeblue bg-white/60 border border-themeblue/30 align-middle">
+              <span className="ml-2 px-1 py-0.5 rounded text-xs font-semibold text-themeblue bg-background/60 border border-themeblue/30 align-middle">
               {range}
             </span>
           </div>
           <div className="flex items-center gap-2">
-            {/* Style toggle (header right) */}
-            <div className={`inline-flex rounded-full overflow-hidden border border-themeblue`}>
-              <button
-                type="button"
-                className={`px-2 py-0.5 text-[10px] font-semibold ${!useLightBg ? 'bg-themeblue text-white' : 'bg-transparent text-themeblue'}`}
-                onClick={() => setStylePref('dark')}
-              >Dark</button>
-              <button
-                type="button"
-                className={`px-2 py-0.5 text-[10px] font-semibold ${useLightBg ? 'bg-themeblue text-white' : 'bg-transparent text-themeblue'}`}
-                onClick={() => setStylePref('light')}
-              >Light</button>
-            </div>
+            {/* Intentionally no extra theme toggle here; mobile follows the global theme setting */}
           </div>
         </div>
       </div>
 
       {/* Chart */}
-  <div className={`rounded-lg ${chartBgClass} h-40 flex items-center justify-center ${useLightBg ? 'text-themeblue/80' : 'text-white/80'} text-sm overflow-hidden`}>
+      <div className={`rounded-lg ${chartBgClass} h-40 flex items-center justify-center text-foreground/80 text-sm overflow-hidden border border-Tdivider`}>
         {loadingSeries && <span>Loading…</span>}
-        {!loadingSeries && seriesError && <span className="text-red-500">{seriesError}</span>}
+        {!loadingSeries && seriesError && <span className="text-tred">{seriesError}</span>}
         {!loadingSeries && !seriesError && series && series.length > 1 && (
           <LineChart data={series} className="w-full h-full" />
         )}
@@ -453,8 +444,8 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
             type="button"
             className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
               range===r
-                ? 'bg-themeblue text-white border-themeblue'
-                : 'bg-white text-themeblue border-themeblue'
+                ? 'bg-accent text-white border-accent'
+                : 'bg-background text-accent border-accent'
             }`}
             onClick={() => {
               setRange(r);
@@ -477,8 +468,8 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
             }}
             className={
               showGBPValues
-                ? 'px-2 py-0.5 rounded text-[10px] font-semibold bg-themeblue text-white border border-themeblue'
-                : 'px-2 py-0.5 rounded text-[10px] font-semibold bg-white text-themeblue border border-themeblue'
+                ? 'px-2 py-0.5 rounded text-[10px] font-semibold bg-accent text-white border border-accent'
+                : 'px-2 py-0.5 rounded text-[10px] font-semibold bg-background text-accent border border-accent'
             }
           >
             <span className={showGBPValues ? 'font-extrabold' : 'font-semibold'}>GBP</span>
@@ -486,7 +477,7 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
           <div className="flex items-center">
             <label className={`mr-2 ${sortLabelTextClass}`}>Sort</label>
             <select
-              className={`bg-transparent border ${selectBorderClass} rounded px-2 py-1 text-sm ${useLightBg ? 'text-themeblue-disabled' : 'text-themeblue'}`}
+              className={`bg-transparent border ${selectBorderClass} rounded px-2 py-1 text-sm text-accent`}
               value={sortBy}
               onChange={(e) => {
                 const v = e.target.value as SortKey;
@@ -498,7 +489,7 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
                 <option
                   key={o.key}
                   value={o.key}
-                  className={`${useLightBg ? 'text-themeblue-disabled' : 'text-themeblue'}`}
+                  className="text-accent"
                 >
                   {o.label}
                 </option>
@@ -531,38 +522,38 @@ export default function MobilePortfolioView({ holdings, prices, fxRates, cashGBP
                 <LogoWithFallback
                   src={h.logo_url || null}
                   alt=""
-                  className="bg-white border w-9 h-9"
+                  className="bg-background border border-Tdivider w-9 h-9"
                   fallback={
-                    <div className="w-9 h-9 bg-gray-800 border border-gray-700 flex items-center justify-center text-xs text-gray-200 font-bold">
+                    <div className="w-9 h-9 bg-Tdark-shade border border-Tdivider flex items-center justify-center text-xs text-white font-bold">
                       {(h.ticker || '').toUpperCase().slice(0, 4)}
                     </div>
                   }
                 />
                 <div>
-                  <div className={`${primaryTextClass} font-semibold leading-tight`}>{h.ticker}</div>
-                  <div className={`text-xs ${secondaryTextClass} leading-tight`}>
+                  <div className="text-white font-semibold leading-tight">{h.ticker}</div>
+                  <div className="text-xs text-accent leading-tight">
                     {displayUnits(h.total_shares)} @ {formatCurrency(unitPriceDisplay, displayCcy)}
                   </div>
                 </div>
               </div>
               <div className="text-right">
                 {!hideTotals && (
-                  <div className={`${primaryTextClass} font-bold`}>
+                  <div className="text-white font-bold">
                     {formatCurrency(showGBPValues ? mvGBP : mvNative, displayCcy)}
                   </div>
                 )}
                 <div className="text-xs font-semibold mt-0.5">
-                  <span className={`${(showGBPValues ? unrealGBP : unrealNative) >= 0 ? LIGHT_BLUE_BADGE_POS : LIGHT_BLUE_BADGE_NEG}`}>
+                  <span className={`${(showGBPValues ? unrealGBP : unrealNative) >= 0 ? BADGE_POS : BADGE_NEG}`}>
                     {(showGBPValues ? unrealGBP : unrealNative) >= 0 ? '+' : '-'}{formatCurrency(Math.abs(showGBPValues ? unrealGBP : unrealNative), displayCcy)}
                   </span>
                 </div>
                 <div className="text-xs mt-0.5 flex justify-end gap-1 flex-wrap">
                   <>
-                    <span className={`${changeValueDisplay >= 0 ? LIGHT_BLUE_BADGE_POS : LIGHT_BLUE_BADGE_NEG}`}>
+                    <span className={`${changeValueDisplay >= 0 ? BADGE_POS : BADGE_NEG}`}>
                       {changeValueDisplay >= 0 ? '+' : '-'}{formatCurrency(Math.abs(changeValueDisplay), displayCcy)}
                     </span>
                     {changePct !== null && isFinite(changePct) && (
-                      <span className={`${changeValueDisplay >= 0 ? LIGHT_BLUE_BADGE_POS : LIGHT_BLUE_BADGE_NEG}`}>{Math.abs(changePct).toFixed(2)}%</span>
+                      <span className={`${changeValueDisplay >= 0 ? BADGE_POS : BADGE_NEG}`}>{Math.abs(changePct).toFixed(2)}%</span>
                     )}
                   </>
                 </div>

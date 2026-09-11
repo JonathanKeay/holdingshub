@@ -32,7 +32,7 @@ function coerceFallback(v: string | null): '404' | null {
 
 function isAllowedHost(u: URL) {
   const host = u.hostname.toLowerCase();
-  return host === 'logo.clearbit.com' || host === 'img.logo.dev';
+  return host === 'img.logo.dev';
 }
 
 export async function GET(req: Request) {
@@ -48,9 +48,11 @@ export async function GET(req: Request) {
      const retina = coerceBoolParam(searchParams.get('retina'));
      const fallback = coerceFallback(searchParams.get('fallback'));
 
-    // Preferred: build a Logo.dev URL server-side so the token stays private
-    if (domain && token) {
-      const target = new URL(`https://img.logo.dev/${encodeURIComponent(domain)}?token=${encodeURIComponent(token)}`);
+    // Build a Logo.dev URL server-side so the token stays private when present.
+    // If no token is configured, call Logo.dev without it.
+    if (domain) {
+      const base = `https://img.logo.dev/${encodeURIComponent(domain)}`;
+      const target = new URL(base + (token ? `?token=${encodeURIComponent(token)}` : ''));
       if (theme) target.searchParams.set('theme', theme);
       if (format) target.searchParams.set('format', format);
       if (size != null) target.searchParams.set('size', String(size));

@@ -37,7 +37,7 @@ function LoginPageInner() {
     <main className="mx-auto max-w-sm p-6">
       <h1 className="text-2xl font-bold mb-4">Sign in</h1>
       {returnTo !== '/' && (
-        <p className="mb-2 text-sm text-gray-600">You will return to <code>{returnTo}</code> after signing in.</p>
+        <p className="mb-2 text-sm text-foreground/70">You will return to <code>{returnTo}</code> after signing in.</p>
       )}
       <form onSubmit={onSubmit} className="space-y-3">
         <label className="block">
@@ -65,11 +65,11 @@ function LoginPageInner() {
         <button
           type="submit"
           disabled={loading}
-          className="w-full rounded bg-black text-white py-2"
+          className="w-full rounded bg-themeblue text-white py-2 hover:bg-themeblue-hover"
         >
           {loading ? 'Signing in…' : 'Sign in'}
         </button>
-        {err && <p className="text-sm text-red-600">{err}</p>}
+        {err && <p className="text-sm text-tred">{err}</p>}
       </form>
     </main>
   );

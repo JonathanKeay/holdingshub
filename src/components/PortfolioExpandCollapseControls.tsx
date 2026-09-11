@@ -13,7 +13,7 @@ export default function PortfolioExpandCollapseControls() {
       <button
         type="button"
         onClick={() => broadcast('expand')}
-        className="text-xs px-2 py-1 rounded border border-themeblue text-themeblue font-semibold bg-white active:scale-[.97]"
+        className="text-xs px-2 py-1 rounded border border-themeblue text-themeblue font-semibold bg-background active:scale-[.97]"
         aria-label="Expand all portfolios"
       >
         Expand all
@@ -21,7 +21,7 @@ export default function PortfolioExpandCollapseControls() {
       <button
         type="button"
         onClick={() => broadcast('collapse')}
-        className="text-xs px-2 py-1 rounded border border-themeblue text-themeblue font-semibold bg-white active:scale-[.97]"
+        className="text-xs px-2 py-1 rounded border border-themeblue text-themeblue font-semibold bg-background active:scale-[.97]"
         aria-label="Collapse all portfolios"
       >
         Collapse all

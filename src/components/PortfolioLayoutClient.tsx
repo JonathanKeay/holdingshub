@@ -20,7 +20,7 @@ const BTN_PRIMARY =
 
 // Ghost = outlined with theme blue text
 const BTN_GHOST =
-  `${THEME_BLUE_TEXT} border border-themeblue-hover hover:bg-Thoverlight-tint focus-visible:ring-themeblue`;
+  `${THEME_BLUE_TEXT} border border-themeblue-hover [[data-theme=dark]_&]:border-accent hover:bg-Thoverlight-tint focus-visible:ring-themeblue`;
 
 // --- Cloud sync helpers (safe no-ops if API isn't wired yet) ---
 async function fetchCloud(): Promise<{ order: string[]; hidden: string[] } | null> {
@@ -240,7 +240,7 @@ export default function PortfolioLayoutClient({ portfolios }: { portfolios: Port
       {/* Controls (autosave, no Save button) */}
       <div className="flex items-center justify-end">
         <div className="flex items-center gap-2">
-          <label className="text-gray-500 text-sm">
+          <label className="text-foreground/60 text-sm">
             View:{' '}
             <select
               className="border rounded px-2 py-1 text-sm"
@@ -273,9 +273,9 @@ export default function PortfolioLayoutClient({ portfolios }: { portfolios: Port
               className={`flex items-center justify-between border rounded px-3 py-2 ${isHidden ? 'opacity-60' : ''}`}
             >
               <div className="flex items-center gap-3">
-                <div className="w-6 text-center text-gray-400">{index + 1}</div>
+                <div className="w-6 text-center text-foreground/45">{index + 1}</div>
                 <div className="font-medium">{p.name}</div>
-                {isHidden && <span className="ml-2 text-xs text-gray-500">(hidden)</span>}
+                {isHidden && <span className="ml-2 text-xs text-foreground/60">(hidden)</span>}
               </div>
 
               <div className="flex items-center gap-2">
@@ -307,7 +307,7 @@ export default function PortfolioLayoutClient({ portfolios }: { portfolios: Port
         })}
       </div>
 
-      <div className={`${THEME_BLUE_DISABLED_BG} rounded px-3 py-2 text-xs text-gray-600`}>
+      <div className={`${THEME_BLUE_DISABLED_BG} rounded px-3 py-2 text-xs`}>
         Changes are saved automatically on this device and also synced to your account if available.
       </div>
     </div>

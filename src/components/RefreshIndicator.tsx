@@ -40,7 +40,7 @@ export default function RefreshIndicator({ intervalMs = 15000 }: Props) {
   }, [intervalMs]);
 
   return (
-    <div className="mt-2 text-xs text-gray-500"> 
+    <div className="mt-2 text-xs text-foreground/60">
       Live update status: version {version ? String(version) : '—'} · last check {lastCheck ? lastCheck.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}
     </div>
   );

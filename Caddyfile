@@ -1,5 +1,29 @@
+{
+  # Keep LAN/IP access on plain HTTP unless the user explicitly chooses HTTPS.
+  # This avoids iOS Safari's HTTPS-first / Private Relay interstitial issues with bare IPs.
+  auto_https disable_redirects
+
+  # If a client connects via HTTPS to an IP and omits SNI (common on some iOS Safari flows),
+  # use this name so Caddy can still pick a certificate.
+  default_sni 172.16.20.227
+}
+
 :80 {
   reverse_proxy app:3000
+}
+
+# Explicit HTTPS site for the LAN IP so Caddy provisions a cert for it.
+https://172.16.20.227 {
+  reverse_proxy app:3000
+  tls internal
+}
+
+# iOS Safari may connect to a bare IP without sending SNI.
+# Serve HTTPS on :443 as a catch-all so SNI-less TLS handshakes succeed.
+# Note: iOS will still warn until you trust Caddy's root CA (or use a real domain + public cert).
+:443 {
+  reverse_proxy app:3000
+  tls internal
 }
 
 # or with a LAN domain

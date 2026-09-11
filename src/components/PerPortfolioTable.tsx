@@ -188,13 +188,13 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
   return (
     <div className="mb-8">
       <div className="flex items-center justify-between mb-1 sm:mb-2">
-  <h2 className={`${THEME_BLUE_TEXT} text-l font-bold flex items-center gap-2`}>
+        <h2 className={`${THEME_BLUE_TEXT} text-l font-bold flex items-center gap-2`}>
           <button
             type="button"
             aria-expanded={expanded}
             aria-controls={`portfolio-table-${portfolio.id}`}
             onClick={() => setExpanded((e) => !e)}
-            className="inline-flex items-center justify-center w-5 h-5 rounded border border-themeblue text-themeblue bg-white active:scale-[.97]"
+            className="inline-flex items-center justify-center w-5 h-5 rounded border border-themeblue text-themeblue bg-background active:scale-[.97]"
             title={expanded ? 'Collapse to totals' : 'Expand to show assets'}
           >
             <span
@@ -208,7 +208,7 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
         </h2>
         <div className="flex items-center gap-3">
           {!expanded && (
-            <span className="text-xs text-gray-500">{holdings.length} asset{holdings.length === 1 ? '' : 's'}</span>
+            <span className="text-xs text-foreground/60">{holdings.length} asset{holdings.length === 1 ? '' : 's'}</span>
           )}
           <a
             href={`/transactions?portfolio=${portfolio.id}`}
@@ -221,12 +221,12 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
       </div>
 
       <div className="flex items-center justify-between mb-1 sm:mb-2">
-        <div className="sm:hidden text-xs text-gray-500">{showAllColumns ? 'All columns shown' : 'Compact view'}</div>
+        <div className="sm:hidden text-xs text-foreground/60">{showAllColumns ? 'All columns shown' : 'Compact view'}</div>
         {expanded && (
           <button
             type="button"
             onClick={() => setShowAllColumns(s => !s)}
-            className="sm:hidden text-xs px-2 py-1 rounded border border-themeblue text-themeblue font-semibold bg-white active:scale-[.97]"
+            className="sm:hidden text-xs px-2 py-1 rounded border border-themeblue text-themeblue font-semibold bg-background active:scale-[.97]"
           >
             {showAllColumns ? 'Collapse columns' : 'Expand columns'}
           </button>
@@ -235,11 +235,11 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
 
       <div
         ref={scrollRef}
-        className="overflow-x-auto rounded border bg-white/50 dark:bg-transparent relative"
+        className="overflow-x-auto rounded border border-Tdivider bg-background/50 dark:bg-background/50 relative"
         onScroll={(e)=> setScrolled(e.currentTarget.scrollLeft>0)}
       >
         {expanded && hasOverflow && scrolled && <div className="pointer-events-none absolute left-0 top-0 h-full w-4 bg-linear-to-r from-black/25 to-transparent" />}
-  <table id={`portfolio-table-${portfolio.id}`} className="w-full text-sm">
+        <table id={`portfolio-table-${portfolio.id}`} className="w-full text-sm">
           {expanded && (
           <thead className="bg-themeblue text-white font-semibold border-b-2 border-themeblue-hover">
             <tr>
@@ -289,31 +289,31 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
               const changePercent = hasPrev ? (change / (previousClose * multiplier)) * 100 : 0;
               const changeValue = change * h.total_shares;
               return (
-                <tr key={h.asset_id} className="border-t text-s align-middle">
-                  <td className="p-1 align-middle sticky left-0 z-10 bg-white">
+                <tr key={h.asset_id} className="border-t border-Tdivider text-s align-middle">
+                  <td className="p-1 align-middle sticky left-0 z-10 bg-background">
                     <div className="flex items-center">
                       <LogoWithFallback
                         src={h.logo_url || null}
                         alt={`${h.ticker} logo`}
-                        className="h-8 w-8 rounded bg-white border mr-1"
+                        className="h-8 w-8 rounded bg-background border border-Tdivider mr-1"
                         loading="lazy"
                         decoding="async"
                         fallback={<span className="flex items-center justify-center h-8 w-8 rounded bg-themeblue border mr-1 text-white text-xs font-bold tracking-wide">{(h.ticker || '').toUpperCase().slice(0,3)}</span>}
                       />
                       <div>
                         <div className={`${THEME_BLUE_TEXT} font-bold`}>{h.ticker}</div>
-                        <div className="text-xs text-gray-500">{h.company_name || h.ticker}</div>
+                        <div className="text-xs text-foreground/60">{h.company_name || h.ticker}</div>
                       </div>
                     </div>
                   </td>
                   <td className="p-1 text-right align-top">
-                    <div className="font-semibold text-gray-900" title={hasPrev ? undefined : 'No prior close – change suppressed'}>
+                    <div className="font-semibold text-foreground" title={hasPrev ? undefined : 'No prior close – change suppressed'}>
                       {formatCurrency(price * multiplier, h.currency)}
                     </div>
                     <div className="mt-1 whitespace-nowrap flex items-center justify-end gap-2">
                       {hasPrev ? (
                         <>
-                          <span className={`font-bold ${change < 0 ? 'text-red-600' : change > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                          <span className={`font-bold ${change < 0 ? 'text-tred' : change > 0 ? 'text-tgreen' : 'text-foreground/45'}`}>
                             {formatCurrency(Math.abs(change), h.currency)}
                           </span>
                           {changePercent !== 0 && (
@@ -324,7 +324,7 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
                         </>
                       ) : (
                         <span
-                          className="text-xs text-gray-400 cursor-help"
+                          className="text-xs text-foreground/45 cursor-help"
                           title="No prior close available – daily change suppressed"
                         >
                           n/a
@@ -332,7 +332,7 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
                       )}
                     </div>
                   </td>
-                  <td className={`p-1 text-right align-middle font-bold text-lg ${hasPrev && changeValue !== 0 ? (changeValue > 0 ? POSITIVE_TEXT : NEGATIVE_TEXT) : 'text-gray-300'}`} title={hasPrev ? (changeValue === 0 ? 'No net change' : undefined) : 'No prior close – change suppressed'}>
+                  <td className={`p-1 text-right align-middle font-bold text-lg ${hasPrev && changeValue !== 0 ? (changeValue > 0 ? POSITIVE_TEXT : NEGATIVE_TEXT) : 'text-foreground/35'}`} title={hasPrev ? (changeValue === 0 ? 'No net change' : undefined) : 'No prior close – change suppressed'}>
                     {hasPrev && changeValue !== 0
                       ? formatCurrency(
                           Math.round(Math.abs(changeValue)),
@@ -383,7 +383,7 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
                     {Math.abs(totalChangePercent).toFixed(2)}%
                   </span>
                 ) : (
-                  <span className="text-gray-400">–</span>
+                  <span className="text-foreground/45">–</span>
                 )}
               </td>
               <td className="p-1 text-right">{formatCurrency(totalCostInBase, baseCurrency)}</td>

@@ -24,7 +24,7 @@ export default async function PortfolioLayoutSettings() {
     <main className="p-6 max-w-3xl mx-auto">
       {/* Top nav removed per request */}
       <h1 className={`${THEME_BLUE_TEXT} text-2xl font-bold mb-2`}>Portfolio layout</h1>
-      <p className="text-sm text-gray-500 mb-6">
+      <p className="text-sm text-foreground/60 mb-6">
         Reorder or hide portfolios. Your preferences are stored locally and applied on the dashboard.
       </p>
 

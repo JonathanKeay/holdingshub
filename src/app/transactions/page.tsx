@@ -229,9 +229,9 @@ function TransactionsPageInner() {
   // Colour mapping for type badge
   function typeColor(t: string) {
     const u = (t || '').toUpperCase();
-    if (u === 'BUY' || u === 'TIN') return 'text-green-600';
-    if (u === 'SELL' || u === 'TOT' || u === 'FEE') return 'text-red-600';
-    return 'text-gray-700';
+    if (u === 'BUY' || u === 'TIN') return 'text-tgreen';
+    if (u === 'SELL' || u === 'TOT' || u === 'FEE') return 'text-tred';
+    return 'text-foreground/70';
   }
 
   async function handleSaveEdit() {
@@ -428,7 +428,7 @@ function TransactionsPageInner() {
 
   return (
     <section className="p-4 max-w-6xl mx-auto">
-      <div className="sticky top-0 z-20 bg-white pb-2">
+      <div className="sticky top-0 z-20 bg-background pb-2">
         <h2 className="text-xl font-semibold mb-4">
           {portfolioFilter ? 'Transactions for Portfolio' : 'All Transactions'}
         </h2>
@@ -437,16 +437,16 @@ function TransactionsPageInner() {
         <div className="mb-3">
           <button
             type="button"
-            className="rounded bg-black text-white px-3 py-1 text-sm"
+            className="rounded bg-themeblue text-white px-3 py-1 text-sm hover:bg-themeblue-hover"
             onClick={() => setShowAdd(s => !s)}
           >
             {showAdd ? 'Cancel' : 'Add BUY/SELL'}
           </button>
           {showAdd && (
-            <div className="mt-3 border rounded p-3 bg-gray-50">
+            <div className="mt-3 border border-Tdivider rounded p-3 bg-gray-back">
               <div className="flex flex-wrap items-end gap-3">
                 <label className="text-sm">
-                  <span className="block text-gray-600">Portfolio</span>
+                  <span className="block text-foreground/70">Portfolio</span>
                   <select
                     className="border rounded px-2 py-1 text-sm min-w-[160px]"
                     value={newTx.portfolio_id}
@@ -460,7 +460,7 @@ function TransactionsPageInner() {
                 </label>
 
                 <label className="text-sm">
-                  <span className="block text-gray-600">Ticker</span>
+                  <span className="block text-foreground/70">Ticker</span>
                   <input
                     list="tickers-list"
                     className="border rounded px-2 py-1 text-sm min-w-[120px]"
@@ -476,7 +476,7 @@ function TransactionsPageInner() {
                 </label>
 
                 <label className="text-sm">
-                  <span className="block text-gray-600">Type</span>
+                  <span className="block text-foreground/70">Type</span>
                   <select
                     className="border rounded px-2 py-1 text-sm"
                     value={newTx.type}
@@ -488,7 +488,7 @@ function TransactionsPageInner() {
                 </label>
 
                 <label className="text-sm">
-                  <span className="block text-gray-600">Date</span>
+                  <span className="block text-foreground/70">Date</span>
                   <input
                     type="date"
                     className="border rounded px-2 py-1 text-sm"
@@ -498,7 +498,7 @@ function TransactionsPageInner() {
                 </label>
 
                 <label className="text-sm">
-                  <span className="block text-gray-600">Quantity</span>
+                  <span className="block text-foreground/70">Quantity</span>
                   <input
                     type="number"
                     step="any"
@@ -509,7 +509,7 @@ function TransactionsPageInner() {
                 </label>
 
                 <label className="text-sm">
-                  <span className="block text-gray-600">Price</span>
+                  <span className="block text-foreground/70">Price</span>
                   <input
                     type="number"
                     step="any"
@@ -520,7 +520,7 @@ function TransactionsPageInner() {
                 </label>
 
                 <label className="text-sm">
-                  <span className="block text-gray-600">Fee ({selectedAsset?.currency || '—'})</span>
+                  <span className="block text-foreground/70">Fee ({selectedAsset?.currency || '—'})</span>
                   <input
                     type="number"
                     step="any"
@@ -531,7 +531,7 @@ function TransactionsPageInner() {
                 </label>
 
                 <label className="text-sm">
-                  <span className="block text-gray-600">Cash Value ({selectedPortfolio?.base_currency || 'GBP'})</span>
+                  <span className="block text-foreground/70">Cash Value ({selectedPortfolio?.base_currency || 'GBP'})</span>
                   <input
                     type="number"
                     step="any"
@@ -542,7 +542,7 @@ function TransactionsPageInner() {
                 </label>
 
                 <label className="text-sm">
-                  <span className="block text-gray-600">FX Rate (cash_fx_to_portfolio)</span>
+                  <span className="block text-foreground/70">FX Rate (cash_fx_to_portfolio)</span>
                   <input
                     type="number"
                     step="any"
@@ -553,7 +553,7 @@ function TransactionsPageInner() {
                 </label>
 
                 <label className="flex-1 text-sm min-w-[200px]">
-                  <span className="block text-gray-600">Notes</span>
+                  <span className="block text-foreground/70">Notes</span>
                   <input
                     type="text"
                     className="border rounded px-2 py-1 text-sm w-full"
@@ -564,7 +564,7 @@ function TransactionsPageInner() {
 
                 <button
                   type="button"
-                  className="rounded bg-blue-600 text-white px-3 py-1 text-sm h-8"
+                  className="rounded bg-themeblue text-white px-3 py-1 text-sm h-8 hover:bg-themeblue-hover"
                   onClick={handleCreate}
                   title="Create transaction"
                 >
@@ -623,7 +623,7 @@ function TransactionsPageInner() {
               setFilterType('');
               router.replace('?');
             }}
-            className="text-red-500 hover:text-red-700 text-lg px-1"
+            className="text-tred hover:text-tred-hover text-lg px-1"
             title="Clear all filters"
           >
             ❌
@@ -632,12 +632,12 @@ function TransactionsPageInner() {
       </div>
 
       <div className="overflow-x-auto max-h-[80vh] overflow-y-scroll">
-        <p className="mb-2 text-sm text-gray-600">
+        <p className="mb-2 text-sm text-foreground/70">
           Showing {filteredTransactions.length} transaction{filteredTransactions.length === 1 ? '' : 's'}
           {portfolioFilter ? ` for this portfolio` : ''}
         </p>
-        <table className="w-full text-sm border">
-          <thead className="bg-gray-100 text-left sticky top-0 z-10">
+        <table className="w-full text-sm border border-Tdivider">
+          <thead className="bg-gray-back text-left sticky top-0 z-10">
             <tr>
               <th onClick={() => setSortColumn('date')} className="p-2 cursor-pointer">
                 <span className="inline-flex items-center">
@@ -701,14 +701,14 @@ function TransactionsPageInner() {
                   <div className="inline-flex justify-end gap-2">
                     <button
                       onClick={() => handleEdit(tx.id)}
-                      className="text-blue-500 hover:text-blue-700"
+                      className="text-accent hover:text-accent/80"
                       title="Edit"
                     >
                       <IconEdit className="inline w-6 h-6" />
                     </button>
                     <button
                       onClick={() => handleDelete(tx.id)}
-                      className="text-red-500 hover:text-red-700"
+                      className="text-tred hover:text-tred-hover"
                       title="Delete"
                     >
                       <IconTrash className="inline w-6 h-6" />
@@ -723,7 +723,7 @@ function TransactionsPageInner() {
 
       {editingTx && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded p-6 w-full max-w-md shadow-xl">
+          <div className="bg-background rounded p-6 w-full max-w-md shadow-xl">
             <h3 className="text-lg font-semibold mb-4">Edit Transaction</h3>
             <div className="space-y-3">
               <div>
@@ -786,7 +786,7 @@ function TransactionsPageInner() {
                     className="border px-2 py-1 w-full rounded"
                     placeholder="e.g. 2 for 1 = 2, reverse 1 for 5 = 0.2"
                   />
-                  <p className="text-xs text-gray-500 mt-1">
+                  <p className="text-xs text-foreground/60 mt-1">
                     2-for-1 ⇒ 2.0 &nbsp;•&nbsp; 1-for-5 (reverse) ⇒ 0.2
                   </p>
                 </div>
@@ -847,7 +847,7 @@ function TransactionsPageInner() {
                       }
                       className="border px-2 py-1 w-full rounded"
                     />
-                    <p className="text-xs text-gray-500 mt-1">Currency: set in row via cash_ccy field (optional)</p>
+                    <p className="text-xs text-foreground/60 mt-1">Currency: set in row via cash_ccy field (optional)</p>
                   </div>
                 </>
               )}
@@ -866,7 +866,7 @@ function TransactionsPageInner() {
             <div className="flex justify-end gap-2 mt-4">
               <button
                 onClick={() => setEditingTx(null)}
-                className="px-4 py-2 rounded bg-gray-200 text-black hover:bg-gray-300"
+                className="px-4 py-2 rounded bg-gray-back text-foreground hover:bg-Thoverlight-tint"
               >
                 Cancel
               </button>

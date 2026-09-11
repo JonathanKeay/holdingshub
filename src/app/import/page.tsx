@@ -114,7 +114,7 @@ export default function ImportPage() {
   const disabledClasses = `${THEME_BLUE_DISABLED} px-4 py-2 rounded cursor-not-allowed`;
   const normalClasses = `${THEME_BLUE_ACTIVE} px-4 py-2 rounded transition-transform active:translate-y-[1px]`;
   const normalHover = 'hover:brightness-95';
-  const postPreviewClasses = `bg-white ${THEME_BLUE_CHECKED} border border-[var(--color-themeblue)] px-4 py-2 rounded hover:bg-[var(--color-themeblue-bg)] transition`;
+  const postPreviewClasses = `bg-background ${THEME_BLUE_CHECKED} border border-[var(--color-themeblue)] px-4 py-2 rounded hover:bg-[var(--color-themeblue-bg)] transition`;
 
   const previewBtnClass = isSubmitting
     ? disabledClasses
@@ -155,7 +155,7 @@ export default function ImportPage() {
               {/* show full filename with tooltip; allow wrapping or horizontal scroll */}
               <div
                 title={file.name}
-                className="text-sm text-gray-700 max-w-full break-words"
+                className="text-sm text-foreground max-w-full break-words"
                 style={{ wordBreak: 'break-all' }}
               >
                 {file.name}
@@ -170,14 +170,14 @@ export default function ImportPage() {
                     inputRef.current.value = '';
                   }
                 }}
-                className="text-sm text-gray-500 hover:text-gray-700 px-2 py-1"
+                className="text-sm text-foreground/60 hover:text-foreground px-2 py-1"
                 aria-label="Clear selected file"
               >
                 Change
               </button>
             </>
           ) : (
-            <div className="text-sm text-gray-500">No file selected</div>
+            <div className="text-sm text-foreground/60">No file selected</div>
           )}
         </div>
       </div>
@@ -229,7 +229,7 @@ export default function ImportPage() {
                         }))
                       }
                     />
-                    <label>{ticker} {name && <span className="text-sm text-gray-500">({name})</span>}</label>
+                    <label>{ticker} {name && <span className="text-sm text-foreground/60">({name})</span>}</label>
                   </li>
                 ))}
               </ul>

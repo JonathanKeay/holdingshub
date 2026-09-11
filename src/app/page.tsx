@@ -96,8 +96,6 @@ export default async function Dashboard() {
         const m0 = /^domain:(.+)$/i.exec(url);
         if (m0 && m0[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m0[1])}${logoProxyExtras}`;
         // If this is a Clearbit URL, extract domain and use server-side Logo.dev proxy when token is present
-        const m1 = /^https?:\/\/logo\.clearbit\.com\/(.+)$/i.exec(url);
-        if (m1 && m1[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m1[1])}${logoProxyExtras}`;
         const m2 = /^https?:\/\/img\.logo\.dev\/(.+)$/i.exec(url);
         if (m2 && m2[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m2[1])}${logoProxyExtras}`;
         // Otherwise, proxy the original if it’s allowed
@@ -118,8 +116,6 @@ export default async function Dashboard() {
           if (!url) return null;
           const m0 = /^domain:(.+)$/i.exec(url);
           if (m0 && m0[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m0[1])}${logoProxyExtras}`;
-          const m1 = /^https?:\/\/logo\.clearbit\.com\/(.+)$/i.exec(url);
-          if (m1 && m1[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m1[1])}${logoProxyExtras}`;
           const m2 = /^https?:\/\/img\.logo\.dev\/(.+)$/i.exec(url);
           if (m2 && m2[1]) return `/api/logo-proxy?domain=${encodeURIComponent(m2[1])}${logoProxyExtras}`;
           return `/api/logo-proxy?url=${encodeURIComponent(url)}`;
@@ -198,7 +194,7 @@ export default async function Dashboard() {
         const nextExpected = new Date(mostRecent.getTime() + 5 * 60 * 1000);
 
         return (
-          <p className="mt-4 text-sm text-gray-500 text-left">
+          <p className="mt-4 text-sm text-foreground/60 text-left">
             Next Market Price update expected around{' '}
             {nextExpected.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.
           </p>

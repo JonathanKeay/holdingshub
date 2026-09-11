@@ -155,16 +155,16 @@ export default function CashBalanceToolClient({ portfolios }: { portfolios: Port
     <main className="p-6 max-w-4xl mx-auto space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Cash Balance Adjustment</h1>
-        <button type="button" onClick={resetForm} className="text-sm text-gray-600 underline">
+        <button type="button" onClick={resetForm} className="text-sm text-foreground/70 underline">
           Reset form
         </button>
       </div>
 
       {state?.phase === 'done' && (
-        <div className="p-3 rounded bg-green-50 border border-green-200">{state.message}</div>
+        <div className="p-3 rounded bg-tgreen-bg border border-Tdivider">{state.message}</div>
       )}
       {state?.phase === 'error' && (
-        <div className="p-3 rounded bg-red-50 border border-red-200">{state.message}</div>
+        <div className="p-3 rounded bg-tred-bg border border-Tdivider">{state.message}</div>
       )}
 
       {/* <div style={{fontSize: 12, color: '#888'}}>DEBUG: state.phase = {String(state?.phase)}</div> */}
@@ -283,7 +283,7 @@ export default function CashBalanceToolClient({ portfolios }: { portfolios: Port
                 </thead>
                 <tbody>
                   {state.sameDaySummary.map((row: any, idx: number) => (
-                    <tr key={idx} className="odd:bg-white even:bg-gray-50">
+                    <tr key={idx} className="odd:bg-background even:bg-background/50">
                       <td className="px-2 py-1">
                         {row.date || row.txn_date || row.trade_date
                           ? new Date(row.date || row.txn_date || row.trade_date).toLocaleDateString('en-GB')
@@ -310,30 +310,30 @@ export default function CashBalanceToolClient({ portfolios }: { portfolios: Port
               Balances (as at {state.asOf ? new Date(state.asOf).toLocaleDateString('en-GB') : '-'})
             </h3>
             <div className="flex gap-4">
-              <div className="flex-1 bg-gray-100 rounded p-3 text-center">
+              <div className="flex-1 bg-gray-back rounded p-3 text-center">
                 <div className="text-lg font-bold">
                   {typeof state.current === 'number'
                     ? new Intl.NumberFormat('en-GB', { style: 'currency', currency: state.ccy }).format(state.current)
                     : '—'}
                 </div>
-                <div className="text-xs text-gray-600 mt-1">System Balance</div>
+                <div className="text-xs text-foreground/70 mt-1">System Balance</div>
               </div>
-              <div className="flex-1 bg-gray-100 rounded p-3 text-center">
+              <div className="flex-1 bg-gray-back rounded p-3 text-center">
                 <div className="text-lg font-bold">
                   {typeof state.target === 'number'
                     ? new Intl.NumberFormat('en-GB', { style: 'currency', currency: state.ccy }).format(state.target)
                     : (typeof state.target === 'string' && state.target ? state.target : '—')}
                 </div>
-                <div className="text-xs text-gray-600 mt-1">Target Balance</div>
+                <div className="text-xs text-foreground/70 mt-1">Target Balance</div>
               </div>
-              <div className="flex-1 bg-gray-100 rounded p-3 text-center">
+              <div className="flex-1 bg-gray-back rounded p-3 text-center">
                 <div className={
                   "text-lg font-bold " +
                   (typeof state.diff === 'number'
                     ? state.diff < 0
-                      ? "text-red-600"
+                      ? "text-tred"
                       : state.diff > 0
-                        ? "text-blue-600"
+                        ? "text-accent"
                         : ""
                     : "")
                 }>
@@ -341,7 +341,7 @@ export default function CashBalanceToolClient({ portfolios }: { portfolios: Port
                     ? new Intl.NumberFormat('en-GB', { style: 'currency', currency: state.ccy }).format(state.diff)
                     : '—'}
                 </div>
-                <div className="text-xs text-gray-600 mt-1">Difference</div>
+                <div className="text-xs text-foreground/70 mt-1">Difference</div>
               </div>
             </div>
           </div>
@@ -360,7 +360,7 @@ export default function CashBalanceToolClient({ portfolios }: { portfolios: Port
                 </tr>
               </thead>
               <tbody>
-                <tr className="odd:bg-white even:bg-gray-50">
+                <tr className="odd:bg-background even:bg-background/50">
                   <td className="px-2 py-1">{state.asOf ? new Date(state.asOf).toLocaleDateString('en-GB') : '-'}</td>
                   <td className="px-2 py-1">BAL</td>
                   <td className="px-2 py-1">{state.ccy ? `CASH.${state.ccy}` : '-'}</td>
@@ -382,7 +382,7 @@ export default function CashBalanceToolClient({ portfolios }: { portfolios: Port
               form="cash-balance-form"
               name="intent"
               value="confirm"
-              className="px-4 py-2 rounded bg-emerald-600 text-white"
+              className="px-4 py-2 rounded bg-tgreen text-white hover:bg-tgreen-hover"
             >
               Confirm &amp; Insert BAL
             </button>

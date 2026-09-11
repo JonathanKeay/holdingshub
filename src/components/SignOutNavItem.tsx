@@ -37,7 +37,7 @@ export default function SignOutNavItem({
       onClick={onSignOut}
       title="Sign out"
       aria-label="Sign out"
-      className={`flex items-center gap-2 px-3 py-2 rounded hover:bg-red-50 hover:text-red-600 text-gray-600 ${className}`}
+      className={`flex items-center gap-2 px-3 py-2 rounded hover:bg-tred-bg hover:text-tred text-foreground/70 ${className}`}
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"

@@ -121,7 +121,7 @@ export default function EditAssetPage() {
         />
         <button
           onClick={handleSearch}
-          className="mt-2 px-4 py-2 bg-blue-500 text-white rounded"
+          className="mt-2 px-4 py-2 bg-themeblue text-white rounded hover:bg-themeblue-hover"
         >
           Search
         </button>
@@ -188,7 +188,7 @@ export default function EditAssetPage() {
           </div>
           <button
             onClick={handleUpdate}
-            className="px-4 py-2 bg-green-600 text-white rounded"
+            className="px-4 py-2 bg-tgreen text-white rounded hover:bg-tgreen-hover"
           >
             Save Changes
           </button>
@@ -196,7 +196,7 @@ export default function EditAssetPage() {
       )}
 
       {message && (
-        <p className={`mt-4 text-sm ${message.includes('success') ? 'text-green-600' : 'text-red-500'}`}>
+        <p className={`mt-4 text-sm ${message.includes('success') ? 'text-tgreen' : 'text-tred'}`}>
           {message}
         </p>
       )}

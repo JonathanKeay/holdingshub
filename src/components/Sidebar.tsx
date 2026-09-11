@@ -50,8 +50,8 @@ export function Sidebar() {
 		<Link
 			href={href}
 			className={clsx(
-				'flex flex-col items-center text-xs hover:text-blue-400 transition',
-				pathname === href ? 'text-blue-400' : 'text-gray-300'
+				'flex flex-col items-center text-xs hover:text-accent transition',
+				pathname === href ? 'text-accent' : 'text-white/70'
 			)}
 		>
 			<Icon className="h-6 w-6 mb-1" />
@@ -82,7 +82,7 @@ export function Sidebar() {
 				))}
 
 				{/* Tools section */}
-				<div className="h-px bg-gray-700 mx-1 my-2" />
+				<div className="h-px bg-white/20 mx-1 my-2" />
 				{toolsNavItems.map((item) => {
 					if (item.href === '/tools/cash-balance') {
 						return (
@@ -93,8 +93,8 @@ export function Sidebar() {
 									router.push(`/tools/cash-balance?reset=${Date.now()}`);
 								}}
 								className={clsx(
-									'flex flex-col items-center text-xs hover:text-blue-400 transition w-full',
-									pathname.startsWith('/tools/cash-balance') ? 'text-blue-400' : 'text-gray-300'
+									'flex flex-col items-center text-xs hover:text-accent transition w-full',
+									pathname.startsWith('/tools/cash-balance') ? 'text-accent' : 'text-white/70'
 								)}
 								style={{ background: 'none', border: 'none', padding: 0, margin: 0, cursor: 'pointer' }}
 							>
@@ -123,7 +123,7 @@ export function Sidebar() {
 					type="button"
 					onClick={onSignOut}
 					className={clsx(
-						'mt-2 flex flex-col items-center text-xs hover:text-blue-400 transition w-full text-gray-300'
+						'mt-2 flex flex-col items-center text-xs hover:text-accent transition w-full text-white/70'
 					)}
 					title="Sign out"
 					aria-label="Sign out"

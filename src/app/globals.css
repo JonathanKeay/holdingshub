@@ -3,7 +3,7 @@
 
 :root {
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #111a2e;
 
   /* Inter with system fallback */
   --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -15,46 +15,92 @@
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 
-  /* Theme blue */
-  --color-themeblue: #1a4474;
-  --color-themeblue-hover: #0f2743;
-  --color-themeblue-disabled: #75a2b9ff;
-  --color-themeblue-disabled-bg: #75a2b9ff;
+  /* Brand palette (from charts)
+      - Menu Bar / Tiles: #1a4474
+      - Accent Blue: #3cb4e7
+      - Greys: #dcdee0 (back), #9ea1a2 (icon)
+  */
+    --color-themeblue: #1a4474;
+    --color-themeblue-hover: #0f2743;
+    --color-themeblue-disabled: #3cb4e7;
+
+  /* Tints used for hover/soft backgrounds */
+  --color-themeblue-bg: color-mix(in oklab, #247372 14%, white);
+  --color-themeblue-hover-bg: color-mix(in oklab, #247372 22%, white);
+  --color-themeblue-disabled-bg: color-mix(in oklab, #3cb4e7 22%, white);
+
+  /* Explicit accent + neutrals */
+  --color-accent: #3cb4e7;
+  --color-gray-back: #dcdee0;
+  --color-gray-back-fixed: #dcdee0;
+  --color-gray-icon: #9ea1a2;
+
+    /* Brand text color (theme-aware)
+      Light: menu bar color
+      Dark/system-dark: accent for contrast
+    */
+    --color-brand-text: #1a4474;
 
   /* Custom reds */
   --color-tred: #c62828;
   --color-tred-bg: #FFEBEE;
   --color-tred-hover: #B71C1C;
+  --color-tred-badge-bg: #ca9e9e;
 
   /* Custom greens */
   --color-tgreen: #2E7D32;
   --color-tgreen-bg: #E8F5E9;
   --color-tgreen-hover: #1B5E20;
+  --color-tgreen-badge-bg: #2E7D32;
 
   /* Additional palette */
-  --color-Tsoft-tint: #eaf1f8;          /* For table row backgrounds / soft panels */
-  --color-Thoverlight-tint: #d5e3f1;    /* For hover state backgrounds */
-  --color-Tdivider: #b7c8db;            /* For table borders, separators */
-  --color-Tdark-shade: #0f2743;         /* For headings or sidebar */
+  --color-Tsoft-tint: var(--color-gray-back);          /* For table row backgrounds / soft panels */
+  --color-Thoverlight-tint: color-mix(in oklab, var(--color-gray-back) 75%, #111a2e);    /* Hover */
+  --color-Tdivider: color-mix(in oklab, var(--color-gray-back) 65%, #111a2e);            /* Borders */
+  --color-Tdark-shade: #111a2e;         /* Dark base used by charts */
   --color-success: #28a745;             /* For confirmations, positive values */
   --color-error: #d64545;               /* For warnings, negative values */
 }
 
 :root[data-theme='light'] {
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #111a2e;
 }
 
 :root[data-theme='dark'] {
-  --background: #0a0a0a;
-  --foreground: #ededed;
+  --background: #111a2e;
+  --foreground: #ffffff;
+
+  /* Dark-mode neutral surfaces: keep greys from going “too light” */
+  --color-gray-back: color-mix(in oklab, #dcdee0 18%, var(--background));
+  --color-gray-icon: color-mix(in oklab, #9ea1a2 65%, white);
+
+  /* Dark-mode tints */
+  --color-themeblue-bg: color-mix(in oklab, #1a4474 22%, var(--background));
+  --color-themeblue-hover-bg: color-mix(in oklab, #1a4474 32%, var(--background));
+  --color-themeblue-disabled-bg: color-mix(in oklab, #3cb4e7 28%, var(--background));
+
+  /* Dark-mode semantic fills */
+  --color-brand-text: var(--color-accent);
+  --color-tred-bg: color-mix(in oklab, #c62828 22%, var(--background));
+  --color-tgreen-bg: color-mix(in oklab, #2E7D32 22%, var(--background));
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]),
   :root[data-theme='system'] {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #111a2e;
+    --foreground: #ffffff;
+
+    --color-gray-back: color-mix(in oklab, #dcdee0 18%, var(--background));
+    --color-gray-icon: color-mix(in oklab, #9ea1a2 65%, white);
+    --color-themeblue-bg: color-mix(in oklab, #1a4474 22%, var(--background));
+    --color-themeblue-hover-bg: color-mix(in oklab, #1a4474 32%, var(--background));
+    --color-themeblue-disabled-bg: color-mix(in oklab, #3cb4e7 28%, var(--background));
+
+    --color-brand-text: var(--color-accent);
+    --color-tred-bg: color-mix(in oklab, #c62828 22%, var(--background));
+    --color-tgreen-bg: color-mix(in oklab, #2E7D32 22%, var(--background));
   }
 }
 

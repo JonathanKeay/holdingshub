@@ -10,13 +10,17 @@ const nextConfig: NextConfig = {
   },
   images: {
     remotePatterns: [
-      { protocol: 'https', hostname: 'logo.clearbit.com' },
+      { protocol: 'https', hostname: 'img.logo.dev' },
       { protocol: 'https', hostname: 'static.finnhub.io' },
     ],
   },
   // Note: experimental options removed to avoid Next config warnings
 
   webpack(config) {
+    // Reduce peak memory usage during builds on low-RAM hosts.
+    // This trades build speed for stability.
+    config.parallelism = 1;
+
     // Exclude .svg from Next.js default image loader
     (config.module.rules as Array<unknown>)
       .filter((rule): rule is { test?: RegExp; exclude?: RegExp } => {

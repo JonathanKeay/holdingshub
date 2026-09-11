@@ -268,7 +268,7 @@ export function TotalHoldingsTable({
   return (
     <section className="mb-10">
       <div className="flex items-center justify-between mb-2">
-        <h2 className="text-xl font-semibold text-themeblue">
+        <h2 className={`${THEME_BLUE_TEXT} text-xl font-semibold`}>
           TOTAL HOLDINGS (All Portfolios)
         </h2>
         <button
@@ -276,7 +276,7 @@ export function TotalHoldingsTable({
           className={
             showGBPState
               ? "px-3 py-1 rounded text-sm bg-themeblue text-white hover:bg-themeblue-hover transition-colors"
-              : "px-3 py-1 rounded text-sm border-2 border-themeblue text-themeblue font-semibold bg-white"
+              : "px-3 py-1 rounded text-sm border-2 border-themeblue text-themeblue font-semibold bg-background"
           }
         >
           Show values in {showGBPState ? 'native currency' : 'GBP'}
@@ -284,20 +284,20 @@ export function TotalHoldingsTable({
       </div>
 
       <div className="flex items-center justify-between mb-1 sm:mb-2">
-        <div className="sm:hidden text-xs text-gray-500">
+        <div className="sm:hidden text-xs text-foreground/60">
           {showAllColumns ? 'All columns shown' : 'Compact view'}
         </div>
         <button
           type="button"
           onClick={() => setShowAllColumns(s => !s)}
-          className="sm:hidden text-xs px-2 py-1 rounded border border-themeblue text-themeblue font-semibold bg-white active:scale-[.97]"
+          className="sm:hidden text-xs px-2 py-1 rounded border border-themeblue text-themeblue font-semibold bg-background active:scale-[.97]"
         >
           {showAllColumns ? 'Collapse columns' : 'Expand columns'}
         </button>
       </div>
       <div
         ref={scrollRef}
-        className="overflow-x-auto rounded border bg-white/50 dark:bg-transparent relative"
+        className="overflow-x-auto rounded border border-Tdivider bg-background/50 dark:bg-background/50 relative"
         onScroll={(e) => setScrolled(e.currentTarget.scrollLeft > 0)}
       >
         {hasOverflow && scrolled && (
@@ -381,14 +381,14 @@ export function TotalHoldingsTable({
             const changePercent = hasPrev ? (change / (previousClose * multiplier)) * 100 : 0;
             const changeValue = change * h.total_shares;
             return (
-              <tr key={h.asset_id} className="border-t text-s align-top">
+              <tr key={h.asset_id} className="border-t border-Tdivider text-s align-top">
                 {/* Company (sticky) */}
-                <td className="p-1 align-top sticky left-0 z-10 bg-white" style={{ minWidth: 140 }}>
+                <td className="p-1 align-top sticky left-0 z-10 bg-background" style={{ minWidth: 140 }}>
                   <div className="flex items-center">
                     <LogoWithFallback
                       src={h.logo_url || null}
                       alt={`${h.ticker} logo`}
-                      className="h-10 w-10 rounded bg-white border mr-2"
+                      className="h-10 w-10 rounded bg-background border border-Tdivider mr-2"
                       fallback={<TickerFallbackIcon ticker={h.ticker} />}
                     />
                     <div>
@@ -406,14 +406,14 @@ export function TotalHoldingsTable({
                       <TDn className="text-tred w-6 h-6 mx-auto" />
                     ) : (
                       <span
-                        className="w-6 h-6 inline-flex items-center justify-center text-gray-400 text-lg font-bold select-none"
+                        className="w-6 h-6 inline-flex items-center justify-center text-foreground/45 text-lg font-bold select-none"
                         title="No net change"
                         aria-label="No net change"
                       >•</span>
                     )
                   ) : (
                     <span
-                      className="w-6 h-6 inline-flex items-center justify-center text-gray-400 text-lg font-bold cursor-help select-none"
+                      className="w-6 h-6 inline-flex items-center justify-center text-foreground/45 text-lg font-bold cursor-help select-none"
                       title="No prior close available – daily change suppressed"
                       aria-label="No prior close"
                     >•</span>
@@ -438,7 +438,7 @@ export function TotalHoldingsTable({
                       </>
                     ) : (
                       <span
-                        className="text-xs text-gray-400 cursor-help"
+                        className="text-xs text-foreground/45 cursor-help"
                         title="No prior close available – daily change suppressed"
                       >
                         n/a
