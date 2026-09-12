@@ -150,22 +150,50 @@ describe('T15 — OTR: generic signed cash effect where currently supported, no 
   });
 });
 
-describe('T17 — BAL: CURRENT mechanism (quantity as sign flag + abs(cash_value)) — not the target', () => {
-  it('takes its sign from `quantity`, not from the sign of cash_value', () => {
-    // Reconciliation example: modelled cash needs to move -£20 to match the
-    // broker. Today's mechanism: quantity<0 flags a decrease, magnitude is
-    // abs(cash_value) — cash_value's own sign is not used at all.
-    const txns = [makeTxn({ type: 'BAL', asset_id: 'cash-gbp', quantity: -1, cash_value: 20, cash_ccy: 'GBP' })];
+describe('T17 — BAL: signed cash_value carries both sign and magnitude; quantity is not consulted', () => {
+  // Corrected per the BAL reconciliation design (Workstream C). Supersedes the
+  // old quantity-as-sign-flag characterisation tests that lived here — see
+  // git history for the previous (buggy) behaviour they documented.
+  it('a negative cash_value reduces cash by exactly that amount, with quantity left null', () => {
+    const txns = [makeTxn({ type: 'BAL', asset_id: 'cash-gbp', quantity: null, cash_value: -20, cash_ccy: 'GBP' })];
     expect(cashFor(calculateCashBalancesMulti(txns, assets), 'GBP')).toBeCloseTo(-20, 6);
   });
 
-  it('a positive quantity flag increases cash regardless of how cash_value is signed (documents the quirk directly)', () => {
+  it('a positive cash_value increases cash by exactly that amount', () => {
+    const txns = [makeTxn({ type: 'BAL', asset_id: 'cash-gbp', quantity: null, cash_value: 14.46, cash_ccy: 'GBP' })];
+    expect(cashFor(calculateCashBalancesMulti(txns, assets), 'GBP')).toBeCloseTo(14.46, 6);
+  });
+
+  it('quantity is fully ignored, even if a stray non-null value is present on the row', () => {
+    // Guards against ever reintroducing the old quantity-derived sign flag.
     const txns = [makeTxn({ type: 'BAL', asset_id: 'cash-gbp', quantity: 1, cash_value: -20, cash_ccy: 'GBP' })];
-    // sign = +1 (quantity >= 0), magnitude = abs(-20) = 20 -> cash += +20,
-    // even though cash_value itself was negative. This is exactly the
-    // inversion the target spec (signed cash_value, no quantity flag) exists
-    // to remove — see target-spec.pending.spec.ts.
-    expect(cashFor(calculateCashBalancesMulti(txns, assets), 'GBP')).toBeCloseTo(20, 6);
+    expect(cashFor(calculateCashBalancesMulti(txns, assets), 'GBP')).toBeCloseTo(-20, 6);
+  });
+});
+
+describe('asOf inclusive/exclusive — explicit control for BAL reconciliation pre/post-trade modes', () => {
+  it('defaults to inclusive when asOfInclusive is omitted (unchanged behaviour for existing callers)', () => {
+    const txns = [makeTxn({ type: 'DEP', asset_id: 'cash-gbp', date: '2026-09-12', cash_value: 100, cash_ccy: 'GBP' })];
+    const result = calculateCashBalancesMulti(txns, assets, { asOf: '2026-09-12' });
+    expect(cashFor(result, 'GBP')).toBeCloseTo(100, 6);
+  });
+
+  it('asOfInclusive: true explicitly includes a transaction dated exactly asOf (post-trade)', () => {
+    const txns = [makeTxn({ type: 'DEP', asset_id: 'cash-gbp', date: '2026-09-12', cash_value: 100, cash_ccy: 'GBP' })];
+    const result = calculateCashBalancesMulti(txns, assets, { asOf: '2026-09-12', asOfInclusive: true } as any);
+    expect(cashFor(result, 'GBP')).toBeCloseTo(100, 6);
+  });
+
+  it('asOfInclusive: false excludes a transaction dated exactly asOf (pre-trade)', () => {
+    const txns = [makeTxn({ type: 'DEP', asset_id: 'cash-gbp', date: '2026-09-12', cash_value: 100, cash_ccy: 'GBP' })];
+    const result = calculateCashBalancesMulti(txns, assets, { asOf: '2026-09-12', asOfInclusive: false } as any);
+    expect(cashFor(result, 'GBP')).toBe(0);
+  });
+
+  it('asOfInclusive: false still includes a transaction dated strictly before asOf', () => {
+    const txns = [makeTxn({ type: 'DEP', asset_id: 'cash-gbp', date: '2026-09-11', cash_value: 100, cash_ccy: 'GBP' })];
+    const result = calculateCashBalancesMulti(txns, assets, { asOf: '2026-09-12', asOfInclusive: false } as any);
+    expect(cashFor(result, 'GBP')).toBeCloseTo(100, 6);
   });
 });
 

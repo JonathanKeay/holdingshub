@@ -3,22 +3,9 @@
 
 import { revalidatePath } from 'next/cache';
 import { getSupabaseServerClient } from '@/lib/supabase-server';
-
-type Ccy = 'GBP' | 'USD' | 'EUR';
-
-type TxRow = {
-  type: string | null;
-  date: string | null;
-  gbp_value?: number | null;   // <-- always portfolio base currency
-  cash_value?: number | null;
-  cash_ccy?: string | null;
-  settle_value?: number | null;
-  settle_ccy?: string | null;
-  ticker?: string | null;
-};
+import { computeBalancePreview, type AssetMeta, type Ccy, type Txn } from '@/lib/queries';
 
 const CC = (s?: string | null) => String(s || '').toUpperCase();
-const N = (v: any) => Number(v || 0);
 
 export async function processBalanceAction(_prev: any, formData: FormData) {
   const supabase = await getSupabaseServerClient();
@@ -29,10 +16,11 @@ export async function processBalanceAction(_prev: any, formData: FormData) {
   const targetStr = String(formData.get('target') || '').replace(/,/g, '').trim();
   const mode = String(formData.get('mode') || 'pre') as 'pre' | 'post';
   const note = String(formData.get('note') || '').trim();
-  const explicitCcy = CC(String(formData.get('ccy') || 'GBP')) as Ccy;
 
   let portfolio_name: string | undefined;
-  let ccy: Ccy = explicitCcy;
+  // The portfolio's own base_currency is the single authoritative
+  // reconciliation currency — there is no caller-supplied override.
+  let ccy: Ccy = 'GBP';
 
   if (portfolio_id) {
     const { data: pRec } = await supabase
@@ -43,7 +31,7 @@ export async function processBalanceAction(_prev: any, formData: FormData) {
 
     if (pRec) {
       portfolio_name = pRec.name;
-      ccy = (pRec.base_currency as Ccy) || explicitCcy;
+      ccy = ((pRec.base_currency as Ccy) || 'GBP');
     }
   }
 
@@ -87,23 +75,13 @@ export async function processBalanceAction(_prev: any, formData: FormData) {
     };
   }
 
-  const op = mode === 'post' ? 'lte' : 'lt';
-
-  // Main transaction fetch with ticker from assets
-  const { data: rows, error: fetchErr } = await supabase
+  // Canonical fields only (id, asset_id, type, date, quantity, price, fee,
+  // cash_value, cash_ccy) — the same fields calculateCashBalancesMulti reads
+  // for the dashboard. gbp_value is never used here.
+  const { data: txnRows, error: fetchErr } = await supabase
     .from('transactions')
-    .select(`
-      type,
-      date,
-      gbp_value,
-      cash_value,
-      cash_ccy,
-      settle_value,
-      settle_ccy,
-      assets(ticker)
-    `)
-    .eq('portfolio_id', portfolio_id)
-    [op]('date', asOf);
+    .select('id, portfolio_id, asset_id, type, date, quantity, price, fee, cash_value, cash_ccy')
+    .eq('portfolio_id', portfolio_id);
 
   if (fetchErr) {
     return {
@@ -118,75 +96,59 @@ export async function processBalanceAction(_prev: any, formData: FormData) {
     };
   }
 
-  // Flatten ticker from joined assets
-  const txWithTicker = (rows || []).map((r: any) => ({
-    ...r,
-    ticker: r.assets?.ticker || null
-  }));
+  const { data: assetRows, error: assetsErr } = await supabase
+    .from('assets')
+    .select('id, ticker, currency');
 
-  // --- unified base currency logic ---
-  const perRow = (t: TxRow) => {
-    const T = CC(t.type);
-    const amt = N(t.gbp_value); // already portfolio base currency
+  if (assetsErr) {
+    return {
+      ok: false,
+      phase: 'error',
+      message: `Error loading assets: ${assetsErr.message}`,
+      portfolio_id,
+      portfolio_name,
+      asOf,
+      ccy,
+      mode
+    };
+  }
 
-    if (!amt && T !== 'BAL') return { used: 0, reason: 'NO_BASE_VALUE' };
+  const assetMeta: Record<string, AssetMeta> = {};
+  for (const a of assetRows || []) {
+    assetMeta[a.id] = { ticker: a.ticker, currency: (a.currency as Ccy) ?? 'GBP' };
+  }
 
-    if (T === 'BUY') return { used: -Math.abs(amt), reason: 'BASE_VALUE' };
-    if (T === 'SELL') return { used: +Math.abs(amt), reason: 'BASE_VALUE' };
-    if (['DEP', 'DIV', 'INT'].includes(T)) return { used: +Math.abs(amt), reason: 'BASE_VALUE' };
-    if (['WIT', 'FEE'].includes(T)) return { used: -Math.abs(amt), reason: 'BASE_VALUE' };
-    if (T === 'BAL') return { used: amt, reason: 'BASE_VALUE' }; // signed
+  const txns = (txnRows || []) as Txn[];
 
-    return { used: 0, reason: 'IGNORED' };
-  };
-
-  const detailed = txWithTicker.map(r => {
-    const { used, reason } = perRow(r);
-    return { date: r.date, type: CC(r.type), ticker: r.ticker, used_amount: used, reason };
+  const { current, diff, foreignCurrencyWarning } = computeBalancePreview(txns, assetMeta, {
+    baseCcy: ccy,
+    asOf,
+    mode,
+    target,
   });
 
-  const included = detailed.filter(d => d.used_amount !== 0);
-  const current = included.reduce((s, r) => s + r.used_amount, 0);
-
-  // Same-day transactions with ticker from assets
-  const { data: sameDay } = await supabase
-    .from('transactions')
-    .select(`
-      type,
-      date,
-      gbp_value,
-      cash_value,
-      cash_ccy,
-      settle_value,
-      settle_ccy,
-      assets(ticker)
-    `)
-    .eq('portfolio_id', portfolio_id)
-    .eq('date', asOf);
-
-  const sameDayWithTicker = (sameDay || []).map((r: any) => ({
-    ...r,
-    ticker: r.assets?.ticker || null
-  }));
-
+  // Same-day transactions, for the preview's informational breakdown only.
+  // Each row's own contribution is computed via the same canonical engine
+  // (a single-row call), so this is guaranteed consistent with `current`.
+  const sameDayTxns = txns.filter(t => (t.date || '').slice(0, 10) === asOf);
   const sameDaySummary = Object.values(
-    (sameDayWithTicker as TxRow[]).reduce((acc: any, r) => {
-      const { used } = perRow(r);
-      const k = CC(r.type) + '|' + (r.ticker || '-');
-      if (!acc[k]) acc[k] = { 
-        type: CC(r.type), 
-        ticker: r.ticker || '-', 
-        n: 0, 
-        day_total: 0,
-        date: r.date
-      };
+    sameDayTxns.reduce((acc: any, t) => {
+      const ticker = assetMeta[t.asset_id]?.ticker || '-';
+      // A single-row call to the canonical engine — guarantees this figure
+      // is always consistent with how `current` above was computed.
+      const used = computeBalancePreview([t], assetMeta, {
+        baseCcy: ccy,
+        asOf,
+        mode: 'post',
+        target: 0,
+      }).current;
+      const k = CC(t.type) + '|' + ticker;
+      if (!acc[k]) acc[k] = { type: CC(t.type), ticker, n: 0, day_total: 0, date: t.date };
       acc[k].n += 1;
       acc[k].day_total += used;
       return acc;
     }, {})
   ).sort((a: any, b: any) => a.type.localeCompare(b.type));
-
-  const diff = +(target - current).toFixed(2);
 
   if (intent === 'preview') {
     return {
@@ -201,7 +163,7 @@ export async function processBalanceAction(_prev: any, formData: FormData) {
       target,
       diff,
       sameDaySummary,
-      included
+      foreignCurrencyWarning,
     };
   }
 
@@ -218,7 +180,6 @@ export async function processBalanceAction(_prev: any, formData: FormData) {
     };
   }
 
-  // --- Move this block here, inside the function ---
   const { data: cashAsset } = await supabase
     .from('assets')
     .select('id')
@@ -237,15 +198,20 @@ export async function processBalanceAction(_prev: any, formData: FormData) {
       mode
     };
   }
-  // --- End move ---
+
+  const defaultNote =
+    `BAL reconciliation: calculated ${ccy} ${current.toFixed(2)} vs broker ${ccy} ${target.toFixed(2)} ` +
+    `(${mode}-trade) as of ${asOf}. Adjustment ${diff >= 0 ? '+' : ''}${diff.toFixed(2)}.`;
 
   const { error: insErr } = await supabase.from('transactions').insert({
     portfolio_id,
     type: 'BAL',
     date: asOf,
-    gbp_value: diff,
-    asset_id: cashAsset.id, // <-- add this line
-    notes: note || `BAL via tool · current=${current} · target=${target} · diff=${diff} · ccy=${ccy} · asOf=${asOf}`,
+    asset_id: cashAsset.id,
+    quantity: null,
+    cash_value: diff, // signed: carries both sign and magnitude, no quantity flag
+    cash_ccy: ccy,
+    notes: note || defaultNote,
   });
 
   if (insErr) {

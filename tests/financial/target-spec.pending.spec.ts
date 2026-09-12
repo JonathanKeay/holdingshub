@@ -26,26 +26,10 @@ const assets = assetMetaFor({
   wynn: { ticker: 'WYNN', currency: 'USD' },
 });
 
-describe('T17 — BAL target: signed cash_value, no quantity sign flag (PENDING: Workstream C, Cash Balance tool correction)', () => {
-  it.skip('cash_value alone carries both sign and magnitude; quantity is not consulted', () => {
-    // Target: a BAL row with cash_value=-20 should reduce GBP cash by exactly
-    // 20, with no dependency on `quantity` at all. (The reconciliation tool
-    // should also require a descriptive note on every BAL row — that is a
-    // tool/UX requirement, not something calculateCashBalancesMulti's Txn
-    // shape needs to model, since `notes` plays no part in the cash maths.)
-    // Today: calculateCashBalancesMulti takes its sign from `quantity` (>=0 ?
-    // +1 : -1) and the MAGNITUDE from Math.abs(cash_value) — so a negative
-    // cash_value with the default (unset/zero) quantity currently produces
-    // +20, the opposite of the intended -20. See
-    // current-behaviour.cash.spec.ts's T17 tests for the proof of today's
-    // actual mechanism.
-    const txns = [
-      makeTxn({ type: 'BAL', asset_id: 'cash-gbp', cash_value: -20, cash_ccy: 'GBP' }),
-    ];
-    const result = calculateCashBalancesMulti(txns, assets);
-    expect(cashFor(result, 'GBP')).toBeCloseTo(-20, 6);
-  });
-});
+// T17 — BAL signed cash_value target: IMPLEMENTED. Moved to
+// current-behaviour.cash.spec.ts (now describes actual, current behaviour)
+// as part of the BAL reconciliation design — see git history for this file's
+// previous pending version.
 
 describe('T12b — FEE target: a standalone FEE attributed to a security must also affect the correct cash bucket (PENDING: FEE workstream — stabilisation plan decision 1)', () => {
   it.skip('debits the fee currency\'s cash bucket in addition to any performance attribution', () => {

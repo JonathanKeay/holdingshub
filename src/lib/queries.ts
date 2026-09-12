@@ -138,8 +138,14 @@ function compareTxForHoldings(a: Txn, b: Txn) {
   return a.id < b.id ? -1 : 1;
 }
 
-/** Filter transactions up to (and including) asOf date. */
-function filterAsOf<T extends { date?: string | null }>(txs: T[], asOf?: string | null) {
+/** Filter transactions up to asOf date. `inclusive` (default true) controls
+ * whether transactions dated exactly asOf are kept — used by BAL
+ * reconciliation's post-trade (inclusive) vs pre-trade (exclusive) modes. */
+function filterAsOf<T extends { date?: string | null }>(
+  txs: T[],
+  asOf?: string | null,
+  inclusive: boolean = true
+) {
   if (!asOf) return txs;
   const asOfDate = new Date(asOf);
   if (isNaN(asOfDate.getTime())) return txs;
@@ -147,7 +153,7 @@ function filterAsOf<T extends { date?: string | null }>(txs: T[], asOf?: string 
     if (!t?.date) return true; // keep undated
     const d = new Date(t.date);
     if (isNaN(d.getTime())) return true; // keep malformed
-    return d.getTime() <= asOfDate.getTime();
+    return inclusive ? d.getTime() <= asOfDate.getTime() : d.getTime() < asOfDate.getTime();
   });
 }
 
@@ -395,6 +401,7 @@ export function calculateCashBalancesMulti(
   assetMeta: Record<string, AssetMeta>,
   opts?: {
     asOf?: string;
+    asOfInclusive?: boolean;
     portfolioName?: string;
     requireCashAssetForCashRows?: boolean;
   }
@@ -403,7 +410,7 @@ export function calculateCashBalancesMulti(
   const requireCashAsset = opts?.requireCashAssetForCashRows ?? true;
 
   const cash = newCashMap();
-  const filtered = filterAsOf(txns, asOf);
+  const filtered = filterAsOf(txns, asOf, opts?.asOfInclusive ?? true);
 
   for (const tx of filtered) {
     const t = (tx.type ?? '').toUpperCase();
@@ -411,12 +418,14 @@ export function calculateCashBalancesMulti(
     const isCashAsset = !!(meta && isCashTicker(meta.ticker));
     const assetCcy = (meta?.currency || 'GBP').toUpperCase() as Ccy;
 
-    // BAL: signed movement in cash_value/cash_ccy
+    // BAL: explicit signed reconciliation adjustment. cash_value alone carries
+    // both sign and magnitude — quantity is not consulted (see BAL
+    // reconciliation design; previously the sign came from `quantity`, which
+    // could invert the intended adjustment).
     if (t === 'BAL') {
-      const sign = (Number(tx.quantity) || 0) >= 0 ? +1 : -1;
       if (tx.cash_value != null) {
         const ccy = ((tx.cash_ccy || 'GBP').toUpperCase()) as Ccy;
-        cash[ccy] += sign * Math.abs(Number(tx.cash_value) || 0);
+        cash[ccy] += Number(tx.cash_value) || 0;
       }
       continue;
     }
@@ -490,6 +499,64 @@ export function calculateCashBalancesMulti(
   return (Object.keys(cash) as Ccy[])
     .map(ccy => ({ currency: ccy, balance: Math.round(cash[ccy] * 100) / 100 }))
     .filter(x => Math.abs(x.balance) > 1e-9);
+}
+
+// -----------------------------------------------------------------------------
+// BAL reconciliation preview — pure, unit-testable, built on the canonical
+// cash engine (calculateCashBalancesMulti) rather than a separate gbp_value
+// reducer. Used by the Cash Balance Adjustment tool (src/app/tools/cash-balance).
+// -----------------------------------------------------------------------------
+
+export type ForeignCurrencyWarning = {
+  currencies: Ccy[];
+  message: string;
+};
+
+export function computeBalancePreview(
+  txns: Txn[],
+  assetMeta: Record<string, AssetMeta>,
+  opts: {
+    baseCcy: Ccy;
+    asOf: string;
+    mode: 'pre' | 'post';
+    target: number;
+  }
+): {
+  current: number;
+  target: number;
+  diff: number;
+  ccy: Ccy;
+  foreignCurrencyWarning: ForeignCurrencyWarning | null;
+} {
+  // 'post' (post-trade) includes same-day transactions; 'pre' (pre-trade)
+  // excludes them — see filterAsOf's `inclusive` parameter.
+  const balances = calculateCashBalancesMulti(txns, assetMeta, {
+    asOf: opts.asOf,
+    asOfInclusive: opts.mode === 'post',
+    requireCashAssetForCashRows: true,
+  });
+  const current = balances.find(b => b.currency === opts.baseCcy)?.balance ?? 0;
+  const diff = Math.round((opts.target - current) * 100) / 100;
+
+  // Agreed model: BAL reconciliation is against the base-currency cash
+  // ledger only. We do not auto-convert other currencies' cash buckets into
+  // baseCcy, and we do not build a full multi-currency FX ledger here — so
+  // any non-baseCcy bucket with a real balance in this asOf/mode scope must
+  // be called out explicitly rather than silently read as zero.
+  const foreignCurrencies = balances
+    .map(b => b.currency)
+    .filter(c => c !== opts.baseCcy);
+  const foreignCurrencyWarning: ForeignCurrencyWarning | null = foreignCurrencies.length
+    ? {
+        currencies: foreignCurrencies,
+        message:
+          `This portfolio also has ${foreignCurrencies.join(', ')} cash activity as of this date. ` +
+          `${foreignCurrencies.join('/')} amounts are outside the ${opts.baseCcy} reconciliation ledger ` +
+          `and have NOT been converted or included in the balance above.`,
+      }
+    : null;
+
+  return { current, target: opts.target, diff, ccy: opts.baseCcy, foreignCurrencyWarning };
 }
 
 // -----------------------------------------------------------------------------
