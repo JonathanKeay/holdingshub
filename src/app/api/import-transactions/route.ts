@@ -4,6 +4,7 @@ import { parse } from 'csv-parse/sync';
 import { z } from 'zod';
 import { DateTime } from 'luxon';
 import { createClient } from '@supabase/supabase-js';
+import { resolveCashLeg, deriveAssetToBaseRate } from '@/lib/cashLeg';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -226,7 +227,7 @@ export async function POST(req: NextRequest) {
       normalized: normalizeNameForLookup(p.name),
     }));
 
-    const cleaned: Array<{ raw: any; portfolio_id: string; asset_id: string | null }> = [];
+    const cleaned: Array<{ raw: any; portfolio_id: string; asset_id: string | null; rowNum: number }> = [];
     const errors: any[] = [];
     const seenNewTickers = new Set<string>();
 
@@ -325,6 +326,7 @@ export async function POST(req: NextRequest) {
           raw: parsed,
           portfolio_id: portfolioMatch.id as string,
           asset_id: matchedAsset?.id ?? null,
+          rowNum,
         });
       }
     } catch (err: any) {
@@ -418,97 +420,161 @@ export async function POST(req: NextRequest) {
       (portfolios ?? []).map((p) => [p.id, { name: (p as any).name, currency: (p as any).base_currency ?? null }])
     );
 
-    // Build final transaction rows
-    const finalRows = cleaned
-      .filter((row) => {
-        const base = normalizeTicker(row.raw.ticker);
-        return base !== 'GBP' && (assetsMap[base] || assetsMap[`${base}.L`]);
-      })
-      .map((row) => {
-        const base = normalizeTicker(row.raw.ticker);
-        const tickerKey = assetsMap[base] ? base : `${base}.L`;
+    // Bulk-fetch the local FX cache for every distinct trade date in this
+    // import, once, up front (not per-row). This is the ONLY FX lookup this
+    // route performs for the cash-leg fallback fix below — no external FX
+    // calls are made, matching the local-fx_rates-cache-or-nothing rule.
+    const distinctDates = Array.from(new Set(cleaned.map((r) => r.raw.date_time).filter(Boolean)));
+    const fxQuotesByDate: Record<string, Record<string, number>> = {};
+    if (distinctDates.length > 0) {
+      const { data: fxRows } = await supabase
+        .from('fx_rates')
+        .select('date, quotes')
+        .in('date', distinctDates);
+      for (const row of fxRows ?? []) {
+        if (row?.date) fxQuotesByDate[row.date] = row.quotes as Record<string, number>;
+      }
+    }
 
-        const raw = row.raw;
-        const canonical = canonicalizeType(raw.transaction_type);
+    // Build final transaction rows. A plain loop (not filter().map()) so a
+    // BUY/SELL row that fails the cash-leg fallback check can be skipped and
+    // reported, rather than silently inserted with a fabricated conversion.
+    const finalRows: any[] = [];
+    const skippedCashLeg: { row: number; ticker: string; date: string; portfolio: string; reason: string }[] = [];
 
-        let type: CanonicalType = 'OTR';
-        let quantity = Number(raw.quantity ?? 0);
-        let price = Number(raw.price ?? 0);
-        let fee = Number(raw.fee ?? 0);
-        let fxrate = raw.fxrate == null ? null : Number(raw.fxrate);
-        // we no longer derive or copy gbp_value
-        let settle_value = raw.settle_value == null ? null : Number(raw.settle_value);
-        let split_factor: number | null = null;
+    for (const row of cleaned) {
+      const base = normalizeTicker(row.raw.ticker);
+      if (base === 'GBP' || !(assetsMap[base] || assetsMap[`${base}.L`])) continue;
 
-        if (canonical === 'TRANSFER_GENERIC') {
-          if (quantity < 0) {
-            type = 'TOT';
-            quantity = Math.abs(quantity);
-          } else {
-            type = 'TIN';
-          }
+      const tickerKey = assetsMap[base] ? base : `${base}.L`;
+
+      const raw = row.raw;
+      const canonical = canonicalizeType(raw.transaction_type);
+
+      let type: CanonicalType = 'OTR';
+      let quantity = Number(raw.quantity ?? 0);
+      let price = Number(raw.price ?? 0);
+      let fee = Number(raw.fee ?? 0);
+      let fxrate = raw.fxrate == null ? null : Number(raw.fxrate);
+      // we no longer derive or copy gbp_value
+      let settle_value = raw.settle_value == null ? null : Number(raw.settle_value);
+      let split_factor: number | null = null;
+
+      if (canonical === 'TRANSFER_GENERIC') {
+        if (quantity < 0) {
+          type = 'TOT';
+          quantity = Math.abs(quantity);
         } else {
-          type = canonical;
+          type = 'TIN';
         }
+      } else {
+        type = canonical;
+      }
 
-        if (type === 'SPL') {
-          split_factor = Number(raw.quantity);
-          if (!split_factor || split_factor <= 0) {
-            throw new Error(`Invalid split ratio in CSV for SPL (row with ticker ${base})`);
-          }
-          quantity = 0;
-          price = 0;
-          fee = 0;
-          settle_value = 0;
-          return {
-            portfolio_id: row.portfolio_id,
-            asset_id: assetsMap[tickerKey]?.id,
-            type,
-            date: raw.date_time,
-            quantity,
-            price,
-            fee,
-            cash_value: null,
-            cash_ccy: null,
-            settle_value,
-            settle_ccy: assetsMap[tickerKey]?.currency ?? null,
-            // gbp_value removed (legacy)
-            cash_fx_to_portfolio: fxrate,
-            notes: raw.notes ?? null,
-            split_factor,
-          };
+      if (type === 'SPL') {
+        split_factor = Number(raw.quantity);
+        if (!split_factor || split_factor <= 0) {
+          throw new Error(`Invalid split ratio in CSV for SPL (row with ticker ${base})`);
         }
-
-        const cashFromCsv = raw.cash_value == null ? null : Number(raw.cash_value);
-        const cash_value = cashFromCsv != null ? cashFromCsv : (quantity * price + fee);
-        // recompute settle_value (kept same logic as before)
-        settle_value = (quantity * price + fee);
-
-        const assetMeta = assetsMap[tickerKey] || { id: null, currency: null };
-        const portfolioMeta = portfoliosById[row.portfolio_id] || { currency: null };
-
-        return {
+        quantity = 0;
+        price = 0;
+        fee = 0;
+        settle_value = 0;
+        finalRows.push({
           portfolio_id: row.portfolio_id,
-          asset_id: assetMeta.id,
+          asset_id: assetsMap[tickerKey]?.id,
           type,
           date: raw.date_time,
           quantity,
           price,
           fee,
-          cash_value,
-          cash_ccy: portfolioMeta.currency ?? null,
+          cash_value: null,
+          cash_ccy: null,
           settle_value,
-          settle_ccy: assetMeta.currency ?? null,
-          // gbp_value omitted; set to null if column is NOT nullable:
-          // gbp_value: null,
+          settle_ccy: assetsMap[tickerKey]?.currency ?? null,
+          // gbp_value removed (legacy)
           cash_fx_to_portfolio: fxrate,
           notes: raw.notes ?? null,
           split_factor,
-        };
+        });
+        continue;
+      }
+
+      settle_value = (quantity * price + fee);
+
+      const assetMeta = assetsMap[tickerKey] || { id: null, currency: null };
+      const portfolioMeta = portfoliosById[row.portfolio_id] || { currency: null };
+
+      let cash_value: number | null;
+      let cash_ccy: string | null;
+      let cash_fx_to_portfolio: number | null;
+
+      if (type === 'BUY' || type === 'SELL') {
+        // The fallback fix: never silently relabel a native settlement
+        // amount as portfolio-base cash. See src/lib/cashLeg.ts.
+        const explicitCashValue = raw.cash_value == null ? null : Number(raw.cash_value);
+        const quotesForDate = fxQuotesByDate[raw.date_time];
+        const cachedRateAssetToBase =
+          explicitCashValue == null && fxrate == null
+            ? deriveAssetToBaseRate(quotesForDate, assetMeta.currency, portfolioMeta.currency)
+            : null;
+
+        const cashLeg = resolveCashLeg({
+          assetCcy: assetMeta.currency,
+          baseCcy: portfolioMeta.currency,
+          settleAbs: Math.abs(settle_value),
+          explicitCashValue,
+          explicitFxRate: fxrate,
+          cachedRateAssetToBase,
+        });
+
+        if (cashLeg.status === 'blocked') {
+          skippedCashLeg.push({
+            row: row.rowNum,
+            ticker: base,
+            date: raw.date_time,
+            portfolio: portfolioMeta.name ?? row.portfolio_id,
+            reason: cashLeg.reason,
+          });
+          continue;
+        }
+
+        cash_value = cashLeg.cash_value;
+        cash_ccy = cashLeg.cash_ccy;
+        cash_fx_to_portfolio = cashLeg.cash_fx_to_portfolio;
+      } else {
+        // All other types (DIV/INT/DEP/WIT/FEE/OTR/TIN/TOT): unchanged.
+        const cashFromCsv = raw.cash_value == null ? null : Number(raw.cash_value);
+        cash_value = cashFromCsv != null ? cashFromCsv : (quantity * price + fee);
+        cash_ccy = portfolioMeta.currency ?? null;
+        cash_fx_to_portfolio = fxrate;
+      }
+
+      finalRows.push({
+        portfolio_id: row.portfolio_id,
+        asset_id: assetMeta.id,
+        type,
+        date: raw.date_time,
+        quantity,
+        price,
+        fee,
+        cash_value,
+        cash_ccy,
+        settle_value,
+        settle_ccy: assetMeta.currency ?? null,
+        // gbp_value omitted; set to null if column is NOT nullable:
+        // gbp_value: null,
+        cash_fx_to_portfolio,
+        notes: raw.notes ?? null,
+        split_factor,
       });
+    }
 
     if (finalRows.length === 0) {
-      return NextResponse.json(safe({ message: 'No transactions to insert', errors, availablePortfolios }), { status: 400 });
+      return NextResponse.json(
+        safe({ message: 'No transactions to insert', errors, skippedCashLeg, availablePortfolios }),
+        { status: 400 }
+      );
     }
 
     // Insert transactions
@@ -537,7 +603,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json(safe({ message: `Imported ${finalRows.length} transaction${finalRows.length > 1 ? 's' : ''}` }));
+    const skippedNote = skippedCashLeg.length > 0
+      ? ` ${skippedCashLeg.length} row${skippedCashLeg.length > 1 ? 's' : ''} skipped — no reliable currency conversion (see skippedCashLeg).`
+      : '';
+    return NextResponse.json(safe({
+      message: `Imported ${finalRows.length} transaction${finalRows.length > 1 ? 's' : ''}.${skippedNote}`,
+      skippedCashLeg,
+    }));
   } catch (err: any) {
     console.error('Import API unhandled error:', err);
     return NextResponse.json(

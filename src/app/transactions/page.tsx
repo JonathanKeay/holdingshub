@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/lib/formatCurrency';
 import { IconEdit, IconTrash } from '@/components/icons';
+import { resolveCashLeg, deriveAssetToBaseRate } from '@/lib/cashLeg';
 
 function formatDate(dateStr: string): string {
   const date = new Date(dateStr);
@@ -341,56 +342,46 @@ function TransactionsPageInner() {
   const price = Number(newTx.price);
   const fee = Number(newTx.fee || 0);
   const settle = qty * price + fee;
+  const settleAbs = Math.abs(settle);
 
-    // Helper to compute cash_value in portfolio base currency using cached FX (if available)
-    async function computeCashLeg(
-      assetCcy: string,
-      portfolioId: string,
-      tradeDate: string,
-      settleAbs: number
-    ): Promise<{ cash_value: number | null; cash_ccy: string | null; cash_fx_to_portfolio: number | null }> {
-      const pf = portfolios.find(p => p.id === portfolioId);
-      const base = (pf?.base_currency || 'GBP').toUpperCase();
-      const asset = (assetCcy || 'GBP').toUpperCase();
+    const assetCcy = asset.currency || 'GBP';
+    const baseCcy = selectedPortfolio?.base_currency || 'GBP';
+    const explicitCashValue =
+      newTx.cash_value != null && newTx.cash_value !== undefined && newTx.cash_value !== ('' as any)
+        ? Number(newTx.cash_value)
+        : null;
+    const explicitFxRate = newTx.fxrate != null ? Number(newTx.fxrate) : null;
 
-      if (!settleAbs || settleAbs <= 0) {
-        return { cash_value: null, cash_ccy: null, cash_fx_to_portfolio: null };
-      }
-
-      if (asset === base) {
-        const val = Math.abs(settleAbs);
-        return { cash_value: val, cash_ccy: base, cash_fx_to_portfolio: 1 };
-      }
-
-      // Try cached FX for the trade date from fx_rates (quotes are like { GBPUSD: 1.29 })
+    // Only fetch the local FX cache when we might actually need it: a
+    // cross-currency transaction with no explicit cash_value or FX rate
+    // already supplied. No external FX calls are made here — only the local
+    // fx_rates cache for this exact trade date.
+    let cachedRateAssetToBase: number | null = null;
+    if (assetCcy.toUpperCase() !== baseCcy.toUpperCase() && explicitCashValue == null && explicitFxRate == null) {
+      const tradeDate = newTx.date; // yyyy-mm-dd, matches fx_rates.date
       const { data: fxRow } = await supabase
         .from('fx_rates')
         .select('quotes')
         .eq('date', tradeDate)
-        .single();
+        .maybeSingle();
+      cachedRateAssetToBase = deriveAssetToBaseRate(fxRow?.quotes as Record<string, number> | undefined, assetCcy, baseCcy);
+    }
 
-      const quotes = fxRow?.quotes as Record<string, number> | undefined;
-      if (!quotes) return { cash_value: null, cash_ccy: null, cash_fx_to_portfolio: null };
+    const cashLeg = resolveCashLeg({
+      assetCcy,
+      baseCcy,
+      settleAbs,
+      explicitCashValue,
+      explicitFxRate,
+      cachedRateAssetToBase,
+    });
 
-      // Build X->GBP and GBP->Y, then X->Y
-      const gbpToAsset = quotes['GBP' + asset];
-      const gbpToBase = quotes['GBP' + base];
-
-      let rate: number | null = null;
-      if (asset === 'GBP' && typeof gbpToBase === 'number') {
-        rate = gbpToBase; // GBP->Base
-      } else if (base === 'GBP' && typeof gbpToAsset === 'number') {
-        rate = 1 / gbpToAsset; // Asset->GBP
-      } else if (typeof gbpToAsset === 'number' && typeof gbpToBase === 'number') {
-        rate = (1 / gbpToAsset) * gbpToBase; // Asset->GBP->Base
-      }
-
-      if (rate == null || !isFinite(rate) || rate <= 0) {
-        return { cash_value: null, cash_ccy: null, cash_fx_to_portfolio: null };
-      }
-
-      const cashVal = Math.abs(settleAbs * rate);
-      return { cash_value: cashVal, cash_ccy: base, cash_fx_to_portfolio: cashVal / Math.abs(settleAbs) };
+    if (cashLeg.status === 'blocked') {
+      return alert(
+        `Cannot save this transaction: ${cashLeg.reason}\n\n` +
+        `This is a ${assetCcy} security in a ${baseCcy} portfolio. Enter either the actual ` +
+        `${baseCcy} cash amount or the FX rate used, then try again.`
+      );
     }
 
     const payload: any = {
@@ -403,14 +394,11 @@ function TransactionsPageInner() {
       price: Number(newTx.price),
       fee: Number(newTx.fee || 0),
       notes: newTx.notes || null,
-      // Cash leg: allow explicit value like importer, else fallback to qty*price+fee; cc y = portfolio base
-      cash_value: newTx.cash_value != null && newTx.cash_value !== undefined && newTx.cash_value !== ('' as any)
-        ? Number(newTx.cash_value)
-        : (qty * price + fee),
-      cash_ccy: (selectedPortfolio?.base_currency || 'GBP'),
-      cash_fx_to_portfolio: newTx.fxrate != null ? Number(newTx.fxrate) : null,
+      cash_value: cashLeg.cash_value,
+      cash_ccy: cashLeg.cash_ccy,
+      cash_fx_to_portfolio: cashLeg.cash_fx_to_portfolio,
       // Set settle leg in asset currency and include fee to reflect total cost/proceeds in asset ccy
-      settle_value: Math.abs(settle),
+      settle_value: settleAbs,
       settle_ccy: asset.currency || null,
     };
 
