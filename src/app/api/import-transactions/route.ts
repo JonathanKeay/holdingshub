@@ -6,6 +6,7 @@ import { DateTime } from 'luxon';
 import { createClient } from '@supabase/supabase-js';
 import { resolveCashLeg, deriveAssetToBaseRate } from '@/lib/cashLeg';
 import { findUnresolvedTickerRows } from '@/lib/unresolvedTickers';
+import { splitTickersForLookup } from '@/lib/newTickerLookupCap';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -340,7 +341,10 @@ export async function POST(req: NextRequest) {
       const MAX_LOOKUPS = 20;
       const PER_LOOKUP_TIMEOUT_MS = 3000;
 
-      const tickersToLookup = Array.from(seenNewTickers).slice(0, MAX_LOOKUPS);
+      const { toLookup: tickersToLookup, omitted: omittedNewTickers } = splitTickersForLookup(
+        Array.from(seenNewTickers),
+        MAX_LOOKUPS
+      );
       const newTickers = await Promise.all(
         tickersToLookup.map(async (t) => {
           try {
@@ -357,6 +361,10 @@ export async function POST(req: NextRequest) {
         validCount: cleaned.length,
         invalidCount: errors.length,
         newTickers,
+        // Symbols beyond MAX_LOOKUPS — no Yahoo lookup performed for these.
+        // Surfaced so a 21st+ new ticker is never a silent surprise; see the
+        // UI's retry-workflow explanation for what the user does with this.
+        omittedNewTickers,
         errors,
         availablePortfolios,
       }));

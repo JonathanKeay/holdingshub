@@ -28,6 +28,9 @@ export default function ImportPage() {
     validCount: number;
     invalidCount: number;
     newTickers: { ticker: string; name?: string }[];
+    // Ticker symbols beyond the lookup cap — not checked against Yahoo,
+    // shown so a 21st+ new ticker is never a silent surprise.
+    omittedNewTickers?: string[];
     errors?: { row: number; issues: { message?: string; path?: (string|number)[] }[] }[];
   };
 
@@ -268,6 +271,26 @@ export default function ImportPage() {
                     <label>{ticker} {name && <span className="text-sm text-foreground/60">({name})</span>}</label>
                   </li>
                 ))}
+              </ul>
+            </div>
+          )}
+
+          {preview.omittedNewTickers && preview.omittedNewTickers.length > 0 && (
+            <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded text-sm">
+              <div className="font-semibold mb-2">
+                Only the first {preview.newTickers.length} new tickers are shown above for confirmation.
+                {' '}{preview.omittedNewTickers.length} more new ticker{preview.omittedNewTickers.length > 1 ? 's' : ''} in this file
+                {preview.omittedNewTickers.length > 1 ? " haven't" : " hasn't"} been checked yet:
+              </div>
+              <div className="mb-2" style={{ wordBreak: 'break-word' }}>
+                {preview.omittedNewTickers.join(', ')}
+              </div>
+              <ul className="list-inside list-disc space-y-1 text-foreground/80">
+                <li>You can still tick and confirm the tickers shown above, then select Confirm &amp; Import.</li>
+                <li>No transaction rows will be imported while any ticker in this file remains unrecognised — the import will report which rows are still blocked rather than importing part of the file.</li>
+                <li>Any asset records you do confirm now will still be created and will remain afterwards.</li>
+                <li>Select Preview Import again with this same file still chosen — the tickers you already confirmed will no longer appear as new, making room for the next batch to work through.</li>
+                <li>Once every ticker in the file is recognised, the whole transaction batch will import together in one go.</li>
               </ul>
             </div>
           )}
