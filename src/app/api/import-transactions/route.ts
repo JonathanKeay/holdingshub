@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { DateTime } from 'luxon';
 import { createClient } from '@supabase/supabase-js';
 import { resolveCashLeg, deriveAssetToBaseRate } from '@/lib/cashLeg';
+import { findUnresolvedTickerRows } from '@/lib/unresolvedTickers';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -419,6 +420,36 @@ export async function POST(req: NextRequest) {
     const portfoliosById = Object.fromEntries(
       (portfolios ?? []).map((p) => [p.id, { name: (p as any).name, currency: (p as any).base_currency ?? null }])
     );
+
+    // All-or-nothing ticker-resolution gate: after asset confirmation/creation
+    // above, every transaction row must reference a ticker that now resolves
+    // to a real asset. If any row doesn't, abort before inserting anything —
+    // no FX-cache fetch, no transaction rows built, no insert. Asset rows
+    // created in the step above are NOT rolled back by this check (scoped
+    // deliberately to transaction-import atomicity only).
+    const unresolvedTickerRows = findUnresolvedTickerRows(
+      cleaned.map((r) => ({
+        rowNum: r.rowNum,
+        ticker: normalizeTicker(r.raw.ticker),
+        date: r.raw.date_time,
+        portfolioId: r.portfolio_id,
+      })),
+      (ticker) => !!(assetsMap[ticker] || assetsMap[`${ticker}.L`]),
+      (portfolioId) => portfoliosById[portfolioId]?.name ?? portfolioId
+    );
+
+    if (unresolvedTickerRows.length > 0) {
+      return NextResponse.json(
+        safe({
+          message:
+            `Import aborted: ${unresolvedTickerRows.length} row${unresolvedTickerRows.length > 1 ? 's' : ''} ` +
+            `reference a ticker that is not a recognised asset. Confirm or fix these tickers and re-import the same file.`,
+          unresolvedTickerRows,
+          availablePortfolios,
+        }),
+        { status: 400 }
+      );
+    }
 
     // Bulk-fetch the local FX cache for every distinct trade date in this
     // import, once, up front (not per-row). This is the ONLY FX lookup this

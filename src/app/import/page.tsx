@@ -20,6 +20,7 @@ export default function ImportPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmedTickers, setConfirmedTickers] = useState<Record<string, boolean>>({});
+  const [unresolvedTickerRows, setUnresolvedTickerRows] = useState<UnresolvedTickerRow[] | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   type PreviewResponse = {
@@ -30,10 +31,19 @@ export default function ImportPage() {
     errors?: { row: number; issues: { message?: string; path?: (string|number)[] }[] }[];
   };
 
+  type UnresolvedTickerRow = {
+    row: number;
+    ticker: string;
+    date: string;
+    portfolio: string;
+    reason: string;
+  };
+
   const handlePreview = async () => {
     if (!file || isSubmitting) return;
     setIsSubmitting(true);
     setStatus('Previewing...');
+    setUnresolvedTickerRows(null);
     try {
       const form = new FormData();
       form.append('file', file);
@@ -71,6 +81,7 @@ export default function ImportPage() {
     if (!file || isSubmitting) return;
     setIsSubmitting(true);
     setStatus('Importing...');
+    setUnresolvedTickerRows(null);
     try {
       const form = new FormData();
       form.append('file', file);
@@ -85,6 +96,12 @@ export default function ImportPage() {
         const detail = body?.error ? ` — ${body.error}` : '';
         const debug = body?.debug ? `\nDebug: ${JSON.stringify(body.debug)}` : '';
         setStatus(`${errMsg}${detail}${debug}`);
+        // All-or-nothing ticker-resolution abort: the file and preview/checkbox
+        // state are deliberately left untouched so the user can tick more
+        // boxes and retry the exact same CSV without re-selecting it.
+        if (Array.isArray(body?.unresolvedTickerRows) && body.unresolvedTickerRows.length > 0) {
+          setUnresolvedTickerRows(body.unresolvedTickerRows);
+        }
         setIsSubmitting(false);
         return;
       }
@@ -203,6 +220,25 @@ export default function ImportPage() {
       </div>
 
       {status && <p className={`mt-4 text-sm ${THEME_BLUE_TEXT}`}>{status}</p>}
+
+      {unresolvedTickerRows && unresolvedTickerRows.length > 0 && (
+        <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded text-sm">
+          <div className="font-semibold mb-2">
+            Import aborted — no transactions were imported. {unresolvedTickerRows.length} row
+            {unresolvedTickerRows.length > 1 ? 's' : ''} reference a ticker that isn&apos;t a recognised asset:
+          </div>
+          <ul className="list-inside list-disc space-y-1">
+            {unresolvedTickerRows.map((r, i) => (
+              <li key={`${r.row}-${i}`}>
+                Row {r.row}: {r.ticker} — {r.date} — {r.portfolio} — {r.reason}
+              </li>
+            ))}
+          </ul>
+          <div className="mt-2 text-foreground/70">
+            Tick the box for each ticker above under &quot;New Tickers&quot; and select Confirm &amp; Import again — the same file is still selected.
+          </div>
+        </div>
+      )}
 
       {preview && (
         <div className="mt-6">
