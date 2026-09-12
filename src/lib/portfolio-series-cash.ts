@@ -83,11 +83,11 @@ export function applyCashTxn(cash: Record<Ccy, number>, meta: AssetMeta, tx: Txn
   }
 
   if (t === 'OTR') {
-    if (isCashAsset) {
-      if (tx.cash_value != null) {
-        const ccy = ((tx.cash_ccy || 'GBP').toUpperCase()) as Ccy;
-        cash[ccy] += Number(tx.cash_value) || 0;
-      }
+    // Not gated by isCashAsset — kept in lockstep with calculateCashBalancesMulti's
+    // OTR branch in src/lib/queries.ts. See the comment there for why.
+    if (tx.cash_value != null) {
+      const ccy = ((tx.cash_ccy || 'GBP').toUpperCase()) as Ccy;
+      cash[ccy] += Number(tx.cash_value) || 0;
     }
     return;
   }

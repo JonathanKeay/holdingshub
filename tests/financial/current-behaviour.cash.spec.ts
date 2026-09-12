@@ -26,24 +26,20 @@ describe('T8/T9 — DIV/INT: gross cash event, independent of any withholding-ta
     expect(cashFor(result, 'GBP')).toBeCloseTo(4.9, 2);
   });
 
-  it('IMPORTANT — a same-day OTR withholding-tax row on the SAME security does NOT net against the DIV today (confirms a real, quantifiable gap, not just a hypothetical one)', () => {
+  it('a same-day OTR withholding-tax row on the SAME security now nets against the DIV, producing real net cash received (OTR cash-effect fix)', () => {
     // Real data example (IBKR ISA, WYNN, 2024-05-31): DIV gross 4.904875, OTR tax -0.7376932.
-    // Per the "NEW FINDING" describe block below, an OTR row on a non-cash
-    // asset (WYNN is not CASH.*) has zero cash effect under the production
-    // default requireCashAssetForCashRows=true. DIV/INT's branch has no such
-    // gate, so it always contributes. The combination therefore currently
-    // books ONLY the gross dividend (4.904875) — the withholding tax is
-    // silently dropped, overstating modelled cash by the tax amount on every
-    // one of the 42 real dividend-with-tax rows in the data (£76.04 total).
-    // This is independent of, and does not require, any DIV/OTR pairing logic
-    // — it is a direct, confirmed consequence of today's isCashAsset gate.
+    // OTR's cash branch is no longer gated by isCashAsset (see "OTR SPEC"
+    // describe block below) — DIV and OTR each contribute their own signed
+    // cash_value independently (still no explicit pairing/merging logic; it's
+    // two separate rows each posting their own amount), so together they land
+    // on the real net cash the broker actually credited: 4.904875 - 0.7376932
+    // = 4.1671818 -> rounds to 4.17.
     const txns = [
       makeTxn({ type: 'DIV', asset_id: 'wynn', date: '2024-05-31', cash_value: 4.904875, cash_ccy: 'GBP' }),
       makeTxn({ type: 'OTR', asset_id: 'wynn', date: '2024-05-31', cash_value: -0.7376932, cash_ccy: 'GBP' }),
     ];
     const result = calculateCashBalancesMulti(txns, assets);
-    // (rounded to 2dp by calculateCashBalancesMulti, as above)
-    expect(cashFor(result, 'GBP')).toBeCloseTo(4.9, 2); // NOT 4.17 (the real net cash received, rounded)
+    expect(cashFor(result, 'GBP')).toBeCloseTo(4.17, 2); // net of withholding tax, NOT 4.90 (gross only)
   });
 
   it('INT behaves identically to DIV: gross positive cash inflow', () => {
@@ -53,33 +49,65 @@ describe('T8/T9 — DIV/INT: gross cash event, independent of any withholding-ta
   });
 });
 
-describe('NEW FINDING (surfaced while writing these tests) — OTR/FEE/DEP/WIT rows attached to a non-cash-ticker asset currently have ZERO cash effect', () => {
-  it('an OTR row on a real security (not CASH.*) is silently excluded from the cash total under the production default', () => {
-    // This is exactly the shape of 50 of your 94 real OTR rows (42 US dividend
-    // withholding-tax rows + 8 OTLY ADR-fee rows) — all attached to a security
-    // ticker, none to a CASH.* ticker. calculateCashBalancesMulti's OTR branch
-    // is gated by `!requireCashAsset || isCashAsset`; with the production
-    // default requireCashAssetForCashRows=true and a non-cash asset, isCashAsset
-    // is false, so the row is skipped entirely — its negative amount currently
-    // has NO effect on the modelled cash balance at all, despite being real
-    // money that left the account. This is not something this task was asked
-    // to fix — flagging it as newly-confirmed evidence relevant to the Cash/FX
-    // forensic investigation (Workstream B).
+describe('OTR SPEC (Cash/FX forensic investigation, Workstream B) — OTR cash effect is unconditional; FEE/DEP/WIT remain gated to CASH.* only', () => {
+  it('an OTR row on a real security (not CASH.*) now reduces cash by its signed cash_value — the withholding-tax case', () => {
+    // This is exactly the shape of 42 real dividend-withholding-tax OTR rows
+    // (IBKR ISA/TRD) — attached to the security ticker whose dividend was
+    // taxed, not to CASH.*. Target invariant: for OTR, a non-zero cash_value
+    // is an explicit cash movement in cash_ccy regardless of asset_id — the
+    // asset is context only. calculateCashBalancesMulti's OTR branch no
+    // longer consults isCashAsset/requireCashAsset at all.
     const txns = [makeTxn({ type: 'OTR', asset_id: 'wynn', date: '2024-05-31', cash_value: -0.7376932, cash_ccy: 'GBP' })];
     const result = calculateCashBalancesMulti(txns, assets);
-    expect(cashFor(result, 'GBP')).toBe(0); // confirmed current behaviour, not a target
+    expect(cashFor(result, 'GBP')).toBeCloseTo(-0.74, 2);
   });
 
-  it('the same shape applies to an OTLY-style ADR fee (OTR on a security)', () => {
+  it('the same fix applies to an OTLY-style ADR fee (OTR on a security)', () => {
     const txns = [makeTxn({ type: 'OTR', asset_id: 'otly', date: '2022-06-09', cash_value: -9.16894, cash_ccy: 'GBP' })];
+    const result = calculateCashBalancesMulti(txns, assets);
+    expect(cashFor(result, 'GBP')).toBeCloseTo(-9.17, 2);
+  });
+
+  it('an OTR row on the CASH.GBP asset (e.g. the HGLD "income sweep" pattern) continues to affect cash exactly as before the fix', () => {
+    const txns = [makeTxn({ type: 'OTR', asset_id: 'cash-gbp', date: '2024-06-10', cash_value: 311.13, cash_ccy: 'GBP' })];
+    const result = calculateCashBalancesMulti(txns, assets);
+    expect(cashFor(result, 'GBP')).toBeCloseTo(311.13, 6);
+  });
+
+  it('an OTR row on a CASH.USD asset (e.g. the ETRO pattern) continues to affect cash exactly as before the fix', () => {
+    const txns = [makeTxn({ type: 'OTR', asset_id: 'cash-usd', date: '2024-06-10', cash_value: 50, cash_ccy: 'USD' })];
+    const result = calculateCashBalancesMulti(txns, assets);
+    expect(cashFor(result, 'USD')).toBeCloseTo(50, 6);
+  });
+
+  it('a zero-value OTR row has no cash effect, on either a security or a CASH.* asset', () => {
+    const txns = [
+      makeTxn({ type: 'OTR', asset_id: 'wynn', date: '2024-06-10', cash_value: 0, cash_ccy: 'GBP' }),
+      makeTxn({ type: 'OTR', asset_id: 'cash-gbp', date: '2024-06-10', cash_value: 0, cash_ccy: 'GBP' }),
+    ];
     const result = calculateCashBalancesMulti(txns, assets);
     expect(cashFor(result, 'GBP')).toBe(0);
   });
 
-  it('by contrast, an OTR row on the CASH.GBP asset (e.g. the HGLD "income sweep" pattern) does affect cash', () => {
-    const txns = [makeTxn({ type: 'OTR', asset_id: 'cash-gbp', date: '2024-06-10', cash_value: 311.13, cash_ccy: 'GBP' })];
+  it('by contrast, a DEP/WIT/FEE row on a non-cash security asset still has NO cash effect — this fix does not touch that gate', () => {
+    const txns = [
+      makeTxn({ type: 'DEP', asset_id: 'wynn', date: '2024-06-10', cash_value: 1000, cash_ccy: 'GBP' }),
+      makeTxn({ type: 'WIT', asset_id: 'wynn', date: '2024-06-10', cash_value: 100, cash_ccy: 'GBP' }),
+      makeTxn({ type: 'FEE', asset_id: 'wynn', date: '2024-06-10', cash_value: 5, cash_ccy: 'GBP' }),
+    ];
     const result = calculateCashBalancesMulti(txns, assets);
-    expect(cashFor(result, 'GBP')).toBeCloseTo(311.13, 6);
+    expect(cashFor(result, 'GBP')).toBe(0);
+  });
+
+  it('OTR still has zero effect on holdings/units/cost basis/realised P&L, on a security ticker with a non-zero cash_value', () => {
+    const holding = makeHolding({ asset_id: 'wynn', ticker: 'WYNN', currency: 'USD' });
+    applyTransactionToHolding(holding, makeTxn({ type: 'OTR', asset_id: 'wynn', quantity: 1, price: -3.38, cash_value: -2.55, cash_ccy: 'GBP', settle_value: -3.38, settle_ccy: 'USD' }));
+    expect(holding.total_shares).toBe(0);
+    expect(holding.total_cost).toBe(0);
+    expect(holding.avg_price).toBe(0);
+    expect(holding.realised_value).toBe(0);
+    expect(holding.realised_cost).toBe(0);
+    expect(holding.realised_proceeds).toBe(0);
   });
 });
 

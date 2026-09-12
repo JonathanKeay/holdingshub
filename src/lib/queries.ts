@@ -452,13 +452,19 @@ export function calculateCashBalancesMulti(
       continue;
     }
 
-    // OTR: allow signed cash_value as-is
+    // OTR: allow signed cash_value as-is. Unlike DEP/WIT/FEE/TIN/TOT, OTR's
+    // cash effect is NOT gated by isCashAsset/requireCashAsset — OTR is a
+    // generic catch-all import type (dividend withholding tax, ADR fees,
+    // account fees, sweep transfers, ...) and real broker cash events of
+    // that kind are routinely recorded against the security that caused
+    // them (e.g. the taxed dividend's ticker), not against a CASH.* row.
+    // The asset is context for the event, not a determinant of whether real
+    // cash moved. See tests/financial/current-behaviour.cash.spec.ts "OTR
+    // SPEC" for the worked examples this fixes.
     if (t === 'OTR') {
-      if (!requireCashAsset || isCashAsset) {
-        if (tx.cash_value != null) {
-          const ccy = ((tx.cash_ccy || 'GBP').toUpperCase()) as Ccy;
-          cash[ccy] += Number(tx.cash_value) || 0;
-        }
+      if (tx.cash_value != null) {
+        const ccy = ((tx.cash_ccy || 'GBP').toUpperCase()) as Ccy;
+        cash[ccy] += Number(tx.cash_value) || 0;
       }
       continue;
     }

@@ -24,6 +24,15 @@ const cashGbp: AssetMeta = {
   price_multiplier: 1,
 };
 
+const wynn: AssetMeta = {
+  id: 'wynn',
+  ticker: 'WYNN',
+  currency: 'USD',
+  status: 'active',
+  resolved_ticker: 'WYNN',
+  price_multiplier: 1,
+};
+
 function balTxn(overrides: Partial<Txn>): Txn {
   return { id: 't1', asset_id: 'cash-gbp', type: 'BAL', cash_ccy: 'GBP', ...overrides };
 }
@@ -45,5 +54,31 @@ describe('applyCashTxn — BAL: signed cash_value carries both sign and magnitud
     const cash = newCashMap();
     applyCashTxn(cash, cashGbp, balTxn({ quantity: 1, cash_value: -20 }));
     expect(cash.GBP).toBeCloseTo(-20, 6);
+  });
+});
+
+describe('applyCashTxn — OTR: cash effect is unconditional (kept in lockstep with calculateCashBalancesMulti)', () => {
+  it('an OTR row on a security (WYNN, not CASH.*) reduces cash by its signed cash_value — the withholding-tax case', () => {
+    const cash = newCashMap();
+    applyCashTxn(cash, wynn, { id: 't1', asset_id: 'wynn', type: 'OTR', cash_value: -0.7376932, cash_ccy: 'GBP' });
+    expect(cash.GBP).toBeCloseTo(-0.7376932, 6);
+  });
+
+  it('an OTR row on a security (OTLY-style ADR fee) reduces cash by its signed cash_value', () => {
+    const cash = newCashMap();
+    applyCashTxn(cash, wynn, { id: 't1', asset_id: 'wynn', type: 'OTR', cash_value: -9.16894, cash_ccy: 'GBP' });
+    expect(cash.GBP).toBeCloseTo(-9.16894, 6);
+  });
+
+  it('an OTR row on CASH.GBP continues to affect cash exactly as before the fix', () => {
+    const cash = newCashMap();
+    applyCashTxn(cash, cashGbp, { id: 't1', asset_id: 'cash-gbp', type: 'OTR', cash_value: 311.13, cash_ccy: 'GBP' });
+    expect(cash.GBP).toBeCloseTo(311.13, 6);
+  });
+
+  it('a zero-value OTR row has no cash effect', () => {
+    const cash = newCashMap();
+    applyCashTxn(cash, wynn, { id: 't1', asset_id: 'wynn', type: 'OTR', cash_value: 0, cash_ccy: 'GBP' });
+    expect(cash.GBP).toBe(0);
   });
 });
