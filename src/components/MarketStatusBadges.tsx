@@ -3,12 +3,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DateTime } from 'luxon';
 import { POSITIVE_BADGE, NEGATIVE_BADGE, THEME_BLUE_DISABLED_BG } from '@/lib/uiColors';
-import { isMarketHoliday } from '@/lib/marketHolidays';
+import { isMarketHoliday, nextTradingDay } from '@/lib/marketHolidays';
 import { formatDurationDHM } from '@/lib/utils';
 
 type MarketCode = 'UK' | 'US';
 
-interface MarketDef {
+export interface MarketDef {
   code: MarketCode;
   label: string;
   tz: string;
@@ -35,7 +35,7 @@ const EXTENDED_WINDOWS: Record<MarketCode, { pre: { h: number; m: number }; post
   US: { pre: { h: 4, m: 0 }, post: { h: 20, m: 0 } },   // US common extended hours
 };
 
-function computeSession(m: MarketDef, nowUtc: DateTime): SessionStatus {
+export function computeSession(m: MarketDef, nowUtc: DateTime): SessionStatus {
   // Convert to market timezone
   const now = nowUtc.setZone(m.tz);
   const weekday = now.weekday; // 1=Mon .. 7=Sun
@@ -50,9 +50,9 @@ function computeSession(m: MarketDef, nowUtc: DateTime): SessionStatus {
     return { code: m.code, label: m.label, phase: 'holiday', note: 'Holiday' };
   }
   if (isWeekend) {
-    // Next open = next Monday at open time
-    const daysToMon = weekday === 6 ? 2 : 1; // Sat -> +2, Sun -> +1
-    const nextOpen = openDT.plus({ days: daysToMon });
+    // Next open = next trading day (skips weekends and holidays) at open time
+    const nextOpenDate = nextTradingDay(m.code, now.startOf('day'));
+    const nextOpen = nextOpenDate.plus({ hours: m.open.h, minutes: m.open.m });
     const mins = Math.round(nextOpen.diff(now, 'minutes').minutes);
     return {
       code: m.code,
@@ -110,11 +110,9 @@ function computeSession(m: MarketDef, nowUtc: DateTime): SessionStatus {
     };
   }
 
-  // After extended close: next open (skip weekend)
-  let nextOpen = openDT.plus({ days: 1 });
-  const nextWeekday = weekday + 1;
-  if (nextWeekday === 6) nextOpen = nextOpen.plus({ days: 2 });
-  else if (nextWeekday === 7) nextOpen = nextOpen.plus({ days: 1 });
+  // After extended close: next open (skips weekends and holidays)
+  const nextOpenDate = nextTradingDay(m.code, now.startOf('day').plus({ days: 1 }));
+  const nextOpen = nextOpenDate.plus({ hours: m.open.h, minutes: m.open.m });
   const mins = Math.round(nextOpen.diff(now, 'minutes').minutes);
   return {
     code: m.code,

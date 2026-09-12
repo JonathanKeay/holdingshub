@@ -5,7 +5,8 @@
 // published 2026/2027 holiday announcement where available.
 
 import { describe, it, expect } from 'vitest';
-import { isMarketHoliday, getMarketHolidaysForYear, applyOverrides, type MarketOverride } from '../../src/lib/marketHolidays';
+import { DateTime } from 'luxon';
+import { isMarketHoliday, getMarketHolidaysForYear, applyOverrides, nextTradingDay, type MarketOverride } from '../../src/lib/marketHolidays';
 
 describe('NYSE New Year\'s Day — the documented Saturday/Sunday exception', () => {
   it('Sunday: 2023-01-01 is a Sunday, observed the following Monday 2023-01-02', () => {
@@ -172,5 +173,22 @@ describe('the override mechanism, exercised without touching the production MARK
   it('the production MARKET_OVERRIDES array is untouched by these tests (still empty)', async () => {
     const { MARKET_OVERRIDES } = await import('../../src/lib/marketHolidays');
     expect(MARKET_OVERRIDES).toEqual([]);
+  });
+});
+
+describe('nextTradingDay', () => {
+  it('NYSE: from a Saturday before a Monday holiday (Presidents\' Day), skips straight to Tuesday', () => {
+    const d = nextTradingDay('US', DateTime.fromISO('2026-02-14', { zone: 'utc' })); // Saturday
+    expect(d.toISODate()).toBe('2026-02-17'); // Monday 2026-02-16 is Presidents' Day
+  });
+
+  it('LSE: from Christmas Day, skips the Christmas/weekend/Boxing-Day-substitute corridor to Tuesday', () => {
+    const d = nextTradingDay('UK', DateTime.fromISO('2026-12-25', { zone: 'utc' })); // Friday, Christmas Day
+    expect(d.toISODate()).toBe('2026-12-29'); // Sat/Sun weekend, Mon 28th is Boxing Day (substitute)
+  });
+
+  it('an ordinary trading day is returned unchanged (from is inclusive)', () => {
+    const d = nextTradingDay('US', DateTime.fromISO('2026-03-10', { zone: 'utc' })); // ordinary Tuesday
+    expect(d.toISODate()).toBe('2026-03-10');
   });
 });

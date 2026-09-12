@@ -179,3 +179,16 @@ export function isMarketHoliday(market: Market, isoDateLocal: string): boolean {
   if (!Number.isFinite(year)) return false;
   return getMarketHolidaysForYear(market, year).includes(isoDateLocal);
 }
+
+/**
+ * The next date (possibly `from` itself) that is neither a weekend nor a
+ * full-day market holiday for `market`, searching forward from `from`
+ * (market-local calendar date, time-of-day is ignored).
+ */
+export function nextTradingDay(market: Market, from: DateTime): DateTime {
+  let d = from;
+  while (d.weekday === 6 || d.weekday === 7 || isMarketHoliday(market, isoDate(d))) {
+    d = d.plus({ days: 1 });
+  }
+  return d;
+}
