@@ -25,9 +25,9 @@ export type Holding = {
   realised_proceeds?: number;
 };
 
-type Ccy = 'GBP' | 'USD' | 'EUR';
+export type Ccy = 'GBP' | 'USD' | 'EUR';
 
-type Txn = {
+export type Txn = {
   id: string;
   portfolio_id: string | null;
   asset_id: string;
@@ -52,7 +52,7 @@ type Txn = {
   split_factor?: number | null;
 };
 
-type AssetMeta = {
+export type AssetMeta = {
   ticker: string;
   currency: Ccy;
   logo_url?: string | null;
@@ -157,7 +157,7 @@ function filterAsOf<T extends { date?: string | null }>(txs: T[], asOf?: string 
  * impliedFX = |cash_value| / |settle_value|, if both present.
  * Falls back to 1 when currencies match or missing data.
  */
-function impliedFxFromSellRow(txn: Txn): number {
+export function impliedFxFromSellRow(txn: Txn): number {
   const cashAbs   = Math.abs(Number(txn.cash_value)   || 0);
   const settleAbs = Math.abs(Number(txn.settle_value) || 0);
   if (cashAbs > 0 && settleAbs > 0) return cashAbs / settleAbs;
@@ -169,7 +169,7 @@ function impliedFxFromSellRow(txn: Txn): number {
 }
 
 /** Book cost for a TIN in the ASSET currency (no gbp_value). */
-function deriveAssetCostForTIN(txn: Txn, assetCcy: string, qty: number, price: number, fee: number): number {
+export function deriveAssetCostForTIN(txn: Txn, assetCcy: string, qty: number, price: number, fee: number): number {
   // a) Best: settle_value in the asset ccy
   if (txn.settle_value != null && (txn.settle_ccy || '').toUpperCase() === assetCcy) {
     return Math.abs(Number(txn.settle_value) || 0);
@@ -191,7 +191,7 @@ function deriveAssetCostForTIN(txn: Txn, assetCcy: string, qty: number, price: n
 /** Apply one transaction to a holding. Realised P/L is in the SELL’s cash currency.
  * Uses only settle_value/cash_value; never uses gbp_value.
  */
-function applyTransactionToHolding(holding: Holding, txn: Txn) {
+export function applyTransactionToHolding(holding: Holding, txn: Txn) {
   const type = (txn.type ?? '').toUpperCase() as keyof typeof TRANSACTION_TYPE_META;
   const meta = TRANSACTION_TYPE_META[type];
   if (!meta) return;
@@ -390,7 +390,7 @@ function calculateCashBalancesISA_GBP(
   return [{ currency: 'GBP', balance: Math.round(gbp * 100) / 100 }];
 }
 
-function calculateCashBalancesMulti(
+export function calculateCashBalancesMulti(
   txns: Txn[],
   assetMeta: Record<string, AssetMeta>,
   opts?: {
