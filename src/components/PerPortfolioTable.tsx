@@ -12,6 +12,7 @@ import {
   THEME_BLUE_DISABLED_BG,
 } from '@/lib/uiColors';
 import type { Holding } from '@/lib/queries';
+import { baseCostContribution } from '@/lib/definitionBDisplay';
 
 type PriceMap = Record<string, { price: number; previous_close: number; price_multiplier: number } | undefined>;
 
@@ -161,6 +162,10 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
   let totalPrevValueInBase = 0;
   let totalCostInBase = 0;
   let totalProfitLossInBase = 0;
+  // Definition B (dormant): becomes true only if some holding opted in
+  // (base_currency set) but could not produce a reliable base cost — never
+  // triggered today, since no live caller sets base_currency yet.
+  let baseCostAggregateIncomplete = false;
   for (const h of sortedHoldings) {
     const price = prices[h.ticker]?.price ?? 0;
     const prev = prices[h.ticker]?.previous_close ?? 0;
@@ -170,12 +175,23 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
     const fx = rate / baseRate;
     const mv = h.total_shares * price * mult;
     const prevVal = h.total_shares * prev * mult;
-    const cost = h.total_cost;
     totalChangeInBase += (price - prev) * mult * h.total_shares * fx;
     totalMarketValueInBase += mv * fx;
     totalPrevValueInBase += prevVal * fx;
-    totalCostInBase += cost * fx;
-    totalProfitLossInBase += (mv - cost) * fx;
+
+    // Definition B: use the engine-provided historical base-currency cost
+    // directly (see src/lib/definitionBDisplay.ts) — never native total_cost
+    // re-derived via today's spot FX rate. A holding that never opted in
+    // (base_currency unset — true for every live holding while Definition B
+    // stays dormant) falls straight through to the existing legacy
+    // calculation, unchanged.
+    const costContribution = baseCostContribution(h, h.total_cost * fx);
+    if (costContribution.incomplete) {
+      baseCostAggregateIncomplete = true;
+    } else {
+      totalCostInBase += costContribution.value;
+      totalProfitLossInBase += mv * fx - costContribution.value;
+    }
   }
   const totalChangePercent = totalPrevValueInBase > 0 ? (totalChangeInBase / totalPrevValueInBase) * 100 : 0;
   const cashTotalInBase = (cashBalances ?? []).reduce((sum, cb) => {
@@ -360,7 +376,11 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
                     )}
                   </td>
                   <td className={`p-1 text-center font-bold align-top ${showAllColumns ? '' : 'hidden sm:table-cell'} ${h.realised_value === 0 ? '' : h.realised_value > 0 ? POSITIVE_TEXT : NEGATIVE_TEXT}`}>
-                    {h.realised_value === 0 ? '' : formatCurrency(h.realised_value, h.currency)}
+                    {/* realised_value's domain is the proceeds/cash currency, which the
+                        cash-leg safeguard guarantees equals the portfolio base currency
+                        whenever the asset's own currency differs from it — h.currency is
+                        only the correct label in the same-currency case. */}
+                    {h.realised_value === 0 ? '' : formatCurrency(h.realised_value, h.currency?.toUpperCase() === baseCurrency ? h.currency : baseCurrency)}
                   </td>
                 </tr>
               );
@@ -386,7 +406,17 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
                   <span className="text-foreground/45">–</span>
                 )}
               </td>
-              <td className="p-1 text-right">{formatCurrency(totalCostInBase, baseCurrency)}</td>
+              <td className="p-1 text-right">
+                {formatCurrency(totalCostInBase, baseCurrency)}
+                {baseCostAggregateIncomplete && (
+                  <span
+                    className="ml-1 text-foreground/60 cursor-help"
+                    title="Incomplete: one or more positions' base-currency cost is unavailable and is excluded from this total, not treated as zero."
+                  >
+                    *
+                  </span>
+                )}
+              </td>
               <td className="p-1 text-right font-bold">
                 <span className={totalMarketValueInBase >= 0 ? 'text-(--color-tgreen)' : 'text-(--color-tred)'}>
                   {formatCurrency(Math.abs(totalMarketValueInBase), baseCurrency)}
@@ -396,6 +426,14 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
                 <span className={totalProfitLossInBase >= 0 ? 'text-(--color-tgreen)' : 'text-(--color-tred)'}>
                   {formatCurrency(Math.abs(totalProfitLossInBase), baseCurrency)}
                 </span>
+                {baseCostAggregateIncomplete && (
+                  <span
+                    className="ml-1 text-foreground/60 cursor-help"
+                    title="Incomplete: one or more positions' base-currency cost is unavailable and is excluded from this total, not treated as zero."
+                  >
+                    *
+                  </span>
+                )}
               </td>
             </tr>
             {cashBalances && cashBalances.length > 0 && (

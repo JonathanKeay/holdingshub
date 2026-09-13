@@ -14,6 +14,7 @@ import {
   type ResolvedTransferForReplay,
   type ResolvedTransferLookup,
 } from './holdingsTransferIntegration';
+import { resolveRealisedCcy } from './definitionBDisplay';
 
 // ----------------------------- Types -----------------------------
 
@@ -30,6 +31,17 @@ export type Holding = {
   realised_value?: number;      // realised P/L in the proceeds (cash) currency domain
   realised_cost?: number;
   realised_proceeds?: number;
+  realised_ccy?: string;        // The actual currency realised_value/_cost/_proceeds are denominated
+                                 // in — proven (not guessed from `currency`, the asset's currency) to
+                                 // be the contributing transaction(s)' own portfolio base currency.
+                                 // Set only by getAllHoldingsAndCashSummary, which blends a ticker
+                                 // across every portfolio and so may combine contributions from
+                                 // portfolios with DIFFERENT base currencies: a single ISO code here
+                                 // means every contributing portfolio shared one; 'MIXED' means they
+                                 // did not (display as such — never silently pick one); undefined
+                                 // means no realised-affecting activity exists for this ticker at all.
+                                 // This is plain display-domain metadata — NOT Holding.base_currency —
+                                 // and reading/writing it never touches the dormant Definition B block.
 
   // ---- Definition B: parallel portfolio-base weighted-average cost ledger ----
   // All fields below are OPTIONAL and additive: a Holding that never sets
@@ -40,16 +52,34 @@ export type Holding = {
   base_currency?: string;        // portfolio's base currency (e.g. 'GBP'), set by the caller to opt in
   base_total_cost?: number;      // weighted-average cost of currently held shares, in base_currency
   base_avg_cost?: number;        // base_total_cost / total_shares (undefined while unreliable or no shares)
-  base_cost_reliable?: boolean;  // false once any contributing transaction could not be trusted as an
-                                  // authoritative base-currency cost — see applyTransactionToHolding.
-                                  // total_cost/base_total_cost are NEVER fabricated once this is false;
-                                  // callers must not display base_total_cost/base_avg_cost as verified
-                                  // figures while it is false.
+  base_cost_reliable?: boolean;  // Governs the CURRENT OPEN POSITION only: false once any
+                                  // contributing transaction currently backing the held shares could
+                                  // not be trusted as an authoritative base-currency cost — see
+                                  // applyTransactionToHolding. base_total_cost/base_avg_cost are NEVER
+                                  // fabricated once this is false; callers must not display them as
+                                  // verified while it is false. This legitimately RESETS to true once
+                                  // the position fully closes (total_shares reaches 0) — there is no
+                                  // open cost left to distrust, and a later fresh BUY starts an
+                                  // independently-verifiable open-cost snapshot. It says nothing about
+                                  // whether past REALISED figures are trustworthy — see
+                                  // base_realised_reliable for that.
   base_realised_value?: number;  // Definition B realised P/L: base-currency proceeds - base-currency
                                   // historical cost of the units sold (never derived from a single
                                   // sale-date FX rate applied to the native ledger)
   base_realised_cost?: number;
   base_realised_proceeds?: number;
+  base_realised_reliable?: boolean; // Governs the CUMULATIVE, LIFETIME realised figures above. Starts
+                                  // true; set false the moment a disposal's contribution to
+                                  // base_realised_value/_cost/_proceeds had to be skipped because the
+                                  // open cost basis was unreliable at that moment. Unlike
+                                  // base_cost_reliable, this NEVER resets — base_realised_value is a
+                                  // running total for this Holding's entire life (never zeroed, even
+                                  // across a full close and later reopening), so a skipped
+                                  // contribution is a permanent, unrecoverable gap in that total. A
+                                  // later reliable BUY/SELL on a reopened position is computed
+                                  // correctly in isolation, but still accumulates into the SAME total
+                                  // that already contains an unverifiable gap — so the cumulative
+                                  // figure must stay flagged unreliable until that gap is repaired.
 };
 
 export type Ccy = 'GBP' | 'USD' | 'EUR';
@@ -108,6 +138,13 @@ const CASH_EVENTS_REQUIRE_CASH_ASSET = true;
 
 // Always treat these as cash-only (do not touch holdings)
 const ALWAYS_CASH_TYPES = new Set(['DIV', 'INT']);
+
+// The exact set of transaction types applyTransactionToHolding's realised
+// P/L branch actually computes a contribution for. Deliberately NOT derived
+// from TRANSACTION_TYPE_META[type].realised — that flag is also true for
+// BUY, which enters the same top-level `if` but matches none of the inner
+// type-specific cases (DIV/INT/FEE/SELL) and so never affects realised_value.
+const REALISED_AFFECTING_TYPES = new Set(['SELL', 'DIV', 'INT', 'FEE']);
 
 // --------------------------- Utilities ---------------------------
 
@@ -382,6 +419,7 @@ export function applyTransactionToHolding(holding: Holding, txn: Txn) {
     holding.base_realised_cost = holding.base_realised_cost ?? 0;
     holding.base_realised_proceeds = holding.base_realised_proceeds ?? 0;
     holding.base_cost_reliable = holding.base_cost_reliable ?? true;
+    holding.base_realised_reliable = holding.base_realised_reliable ?? true;
 
     if (type === 'TIN' || type === 'TOT') {
       holding.base_cost_reliable = false;
@@ -394,6 +432,12 @@ export function applyTransactionToHolding(holding: Holding, txn: Txn) {
 
       if (!reliableRow) {
         holding.base_cost_reliable = false;
+        if (type === 'SELL') {
+          // This disposal's OWN cash leg cannot be trusted — its
+          // contribution to the cumulative realised totals is unknown and,
+          // like the case below, permanently unrecoverable.
+          holding.base_realised_reliable = false;
+        }
       } else if (type === 'BUY') {
         holding.base_total_cost += cashVal!;
       } else {
@@ -405,15 +449,29 @@ export function applyTransactionToHolding(holding: Holding, txn: Txn) {
           holding.base_realised_value += cashVal! - costOut;
           holding.base_realised_proceeds += cashVal!;
           holding.base_realised_cost += costOut;
+        } else {
+          // This disposal's contribution cannot be computed and is being
+          // skipped — base_realised_value's running total now has a
+          // permanent, unrecoverable gap. Unlike base_cost_reliable, this
+          // must never be reset by a later full close.
+          holding.base_realised_reliable = false;
         }
         holding.base_total_cost -= costOut;
       }
     }
 
     if (holding.total_shares === 0) {
-      // Position fully closed: nothing ambiguous remains to distrust, and
-      // any later re-opening (fresh BUYs) starts a clean base-cost ledger —
-      // exactly mirroring the native ledger's own full-exit reset above.
+      // Position fully closed: nothing ambiguous remains about the OPEN
+      // cost — a later re-opening (fresh BUYs) starts a clean, independently
+      // verifiable base-cost snapshot, mirroring the native ledger's own
+      // full-exit reset above. base_cost_reliable is scoped to exactly that
+      // open-cost snapshot, so it is correct to reset it here.
+      //
+      // base_realised_reliable is deliberately NOT touched here — it governs
+      // the cumulative, lifetime realised totals (never zeroed, unlike
+      // base_total_cost), so a gap left by an earlier skipped disposal
+      // remains permanently unrecoverable regardless of how many times this
+      // holding fully closes and reopens afterward.
       holding.base_total_cost = 0;
       holding.base_cost_reliable = true;
     } else if (holding.base_cost_reliable) {
@@ -854,6 +912,19 @@ export async function getAllHoldingsAndCashSummary(
     .select('id, ticker, name, currency, logo_url, status');
   if (!assets) return { holdings: [], cash_balances: [] };
 
+  // Needed ONLY to determine which portfolio-base currency each
+  // transaction's realised contribution is actually denominated in (see
+  // Holding.realised_ccy below) — this is plain display-domain metadata,
+  // not Holding.base_currency, and does not touch or activate the dormant
+  // Definition B ledger in any way.
+  const { data: portfoliosForRealisedCcy } = await supabase
+    .from('portfolios')
+    .select('id, base_currency');
+  const portfolioBaseCcyById: Record<string, string> = {};
+  for (const p of portfoliosForRealisedCcy ?? []) {
+    portfolioBaseCcyById[p.id] = (p.base_currency || 'GBP').toUpperCase();
+  }
+
   const txnsRaw = await fetchAllTable<Txn>(supabase, 'transactions');
   if (!txnsRaw) return { holdings: [], cash_balances: [] };
 
@@ -897,6 +968,15 @@ export async function getAllHoldingsAndCashSummary(
 
   holdingsTxns.sort(compareTxForHoldings);
 
+  // Tracks which portfolio-base currency(ies) actually fed each ticker's
+  // blended realised_value. This table blends a ticker's holdings across
+  // ALL portfolios, which may not share one base currency — h.currency
+  // (the ASSET's currency) is never a safe stand-in for this (proved by
+  // tracing applyTransactionToHolding's SELL branch: the cash-leg safeguard
+  // guarantees a SELL's proceeds — and hence its realised contribution —
+  // are denominated in ITS OWN portfolio's base currency, not the asset's).
+  const realisedCcyByTicker: Record<string, Set<string>> = {};
+
   for (const txn of holdingsTxns) {
     const meta = assetMeta[txn.asset_id];
     if (!meta) continue;
@@ -917,7 +997,36 @@ export async function getAllHoldingsAndCashSummary(
         realised_proceeds: 0,
       };
     }
+
+    // NOTE: TRANSACTION_TYPE_META[type].realised is true for BUY too (it
+    // marks "realised-relevant" broadly), but applyTransactionToHolding's
+    // actual realised branch only ever computes a contribution for SELL/
+    // DIV/INT/FEE — BUY enters that block but matches none of its inner
+    // cases, so it never touches realised_value. Using the raw meta flag
+    // here would wrongly pull in every portfolio a ticker was ever BOUGHT
+    // in (which is usually several), not just the ones that actually fed
+    // realised_value — exactly the bug this explicit list avoids.
+    const ttype = (txn.type ?? '').toUpperCase();
+    if (REALISED_AFFECTING_TYPES.has(ttype) && (txn as any).portfolio_id) {
+      const baseCcy = portfolioBaseCcyById[(txn as any).portfolio_id as string];
+      if (baseCcy) {
+        if (!realisedCcyByTicker[ticker]) realisedCcyByTicker[ticker] = new Set();
+        realisedCcyByTicker[ticker].add(baseCcy);
+      }
+    }
+
     applyTransactionToHoldingResolvingTransfers(holdingsMap[ticker], txn, resolvedTinTransfers);
+  }
+
+  // Attach the resolved domain: a single ISO code if every contributing
+  // portfolio shares one base currency (the case for every ticker in the
+  // current dataset), 'MIXED' if genuinely not (never silently guessed),
+  // or left undefined if this ticker has no realised-affecting activity at
+  // all (its realised_value is 0 and nothing needs a currency label).
+  for (const [ticker, ccys] of Object.entries(realisedCcyByTicker)) {
+    const holding = holdingsMap[ticker];
+    if (!holding) continue;
+    holding.realised_ccy = resolveRealisedCcy(ccys);
   }
 
   const holdings = Object.values(holdingsMap);

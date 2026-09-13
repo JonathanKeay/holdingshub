@@ -5,6 +5,7 @@ import { LogoWithFallback } from '@/components/LogoWithFallback';
 import { TickerFallbackIcon } from '@/components/TickerFallbackIcon';
 import { formatCurrency } from '@/lib/formatCurrency';
 import type { Holding } from '@/lib/queries';
+import { baseCostContribution, baseRealisedContribution, resolveRealisedDisplayCcy } from '@/lib/definitionBDisplay';
 import { TUp, TDn } from '@/components/icons';
 import {
   THEME_BLUE_TEXT,
@@ -217,10 +218,20 @@ export function TotalHoldingsTable({
   });
 
 
+  // Definition B (dormant): each *_Incomplete flag becomes true only if some
+  // holding opted in (base_currency set) but could not produce a reliable
+  // base figure — never triggered today, since no live caller sets
+  // base_currency yet. A holding that never opted in falls straight through
+  // to the existing legacy native×spot-FX calculation, unchanged.
+  let totalCostIncomplete = false;
   const totalCostAllGBP = sortedHoldings.reduce((sum, h) => {
-    // treat h.total_cost as asset-base currency; convert to GBP using asset currency
     const rate = fxRateForCurrency(h.currency);
-    return sum + h.total_cost * rate;
+    const contribution = baseCostContribution(h, h.total_cost * rate);
+    if (contribution.incomplete) {
+      totalCostIncomplete = true; // unavailable — excluded, never substituted with 0
+      return sum;
+    }
+    return sum + contribution.value;
   }, 0);
 
   const totalMarketValueAllGBP = sortedHoldings.reduce((sum, h) => {
@@ -230,16 +241,40 @@ export function TotalHoldingsTable({
     return sum + h.total_shares * price * multiplier * rate;
   }, 0);
 
+  let totalRealisedIncomplete = false;
   const totalRealisedAllGBP = sortedHoldings.reduce((sum, h) => {
-    const rate = fxRateForCurrency(h.currency);
-    return sum + (h.realised_value ?? 0) * rate;
+    if (h.realised_ccy === 'MIXED') {
+      // Genuinely spans portfolios with different base currencies — not
+      // convertible with a single rate, never guessed. Excluded, and the
+      // total is marked incomplete (unless there's nothing to convert anyway).
+      if ((h.realised_value ?? 0) !== 0) totalRealisedIncomplete = true;
+      return sum;
+    }
+    // Use the PROVEN currency domain (the contributing portfolio's base
+    // currency — see Holding.realised_ccy) rather than h.currency (the
+    // asset's own currency, which is very often NOT the domain
+    // realised_value is actually denominated in). Converts once, correctly.
+    const realisedFromCcy = resolveRealisedDisplayCcy(h);
+    const rate = fxRateForCurrency(realisedFromCcy);
+    const contribution = baseRealisedContribution(h, (h.realised_value ?? 0) * rate);
+    if (contribution.incomplete) {
+      totalRealisedIncomplete = true;
+      return sum;
+    }
+    return sum + contribution.value;
   }, 0);
 
+  let totalUnrealisedIncomplete = false;
   const totalUnrealisedAllGBP = sortedHoldings.reduce((sum, h) => {
     const rate = fxRateForCurrency(h.currency);
-    const marketValue = calcMarketValue(h, prices) * rate;
+    const marketValue = calcMarketValue(h, prices) * rate; // current value: today's spot rate is correct here
     const cost = h.total_cost * rate;
-    return sum + (marketValue - cost);
+    const contribution = baseCostContribution(h, cost);
+    if (contribution.incomplete) {
+      totalUnrealisedIncomplete = true;
+      return sum;
+    }
+    return sum + (marketValue - contribution.value);
   }, 0);
 
   const totalChangeValueGBP = sortedHoldings.reduce((sum, h) => {
@@ -488,9 +523,37 @@ export function TotalHoldingsTable({
                     </div>
                   )}
                 </td>
-                {/* Realised value */}
+                {/* Realised value.
+                    h.realised_value's true currency domain is the proceeds/
+                    cash currency, which for a cross-currency trade is the
+                    trade's own PORTFOLIO base currency, NOT the asset's own
+                    currency (proved by tracing applyTransactionToHolding's
+                    SELL branch — the cash-leg safeguard guarantees this).
+                    This table blends a ticker across every portfolio, which
+                    may not share one base currency, so h.realised_ccy (set
+                    by getAllHoldingsAndCashSummary) carries the actual,
+                    determined domain — a single ISO code, or 'MIXED' when
+                    the contributing portfolios genuinely differ (rendered
+                    distinctly below, never guessed at). Using it as the
+                    maybeConvert() "from" currency fixes both the display
+                    label AND the double-conversion that used to happen when
+                    showGBPState was on (h.currency was being used as if it
+                    were the domain, multiplying an already-base-currency
+                    figure by the wrong rate). */}
                 <td className={`p-1 text-center font-semibold align-middle rounded ${showAllColumns ? '' : 'hidden sm:table-cell'} ${h.realised_value === 0 ? '' : h.realised_value > 0 ? 'text-tgreen' : 'text-tred'}`}>
-                  {h.realised_value === 0 ? null : formatCurrency(Math.round(Math.abs(maybeConvert(h.realised_value, h.currency))), showGBPState ? 'GBP' : h.currency).replace(/\.00$/, '')}
+                  {h.realised_ccy === 'MIXED' ? (
+                    <span
+                      className="text-xs text-foreground/60 cursor-help"
+                      title="This ticker's realised P/L spans portfolios with different base currencies and cannot be shown as a single converted figure."
+                    >
+                      mixed
+                    </span>
+                  ) : h.realised_value === 0 ? null : (
+                    formatCurrency(
+                      Math.round(Math.abs(maybeConvert(h.realised_value, resolveRealisedDisplayCcy(h)))),
+                      showGBPState ? 'GBP' : resolveRealisedDisplayCcy(h)
+                    ).replace(/\.00$/, '')
+                  )}
                 </td>
               </tr>
             );
@@ -507,12 +570,20 @@ export function TotalHoldingsTable({
             <td className={`p-1 text-left ${totalChangeValueGBP >= 0 ? POSITIVE_TEXT : NEGATIVE_TEXT}`}>
               {totalChangeValueGBP === 0 ? '' : `${Math.abs(totalChangePercent).toFixed(1)}%`}
             </td>
-            <td className="p-1 text-right">£{Math.round(totalCostAllGBP).toLocaleString()}</td>
+            <td className="p-1 text-right">
+              £{Math.round(totalCostAllGBP).toLocaleString()}
+              {totalCostIncomplete && (
+                <span className="ml-1 text-foreground/60 cursor-help" title="Incomplete: one or more positions' base-currency cost is unavailable and is excluded from this total, not treated as zero.">*</span>
+              )}
+            </td>
             <td className={`p-1 text-right ${totalMarketValueAllGBP >= totalCostAllGBP ? POSITIVE_TEXT : NEGATIVE_TEXT}`}>
               £{Math.round(totalMarketValueAllGBP).toLocaleString()}
             </td>
             <td className={`p-1 text-left ${totalUnrealisedAllGBP >= 0 ? POSITIVE_TEXT : NEGATIVE_TEXT}`}>
               £{Math.round(totalUnrealisedAllGBP).toLocaleString()}
+              {totalUnrealisedIncomplete && (
+                <span className="ml-1 text-foreground/60 cursor-help" title="Incomplete: one or more positions' base-currency cost is unavailable and is excluded from this total, not treated as zero.">*</span>
+              )}
             </td>
           </tr>
 

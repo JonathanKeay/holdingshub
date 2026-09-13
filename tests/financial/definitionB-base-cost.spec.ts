@@ -14,6 +14,7 @@
 // never from retranslating the native ledger at a sale-date FX rate.
 
 import { describe, it, expect } from 'vitest';
+import { applyTransferOut, applyTransferIn } from '../../src/lib/transferCostBasis';
 import { applyTransactionToHolding } from '../../src/lib/queries';
 import { makeTxn, makeHolding } from './helpers';
 
@@ -211,5 +212,111 @@ describe('Definition B — real data: RKH and AMS (mislabelled asset currency, b
     applyTransactionToHolding(holding, makeTxn({ type: 'SELL', quantity: 1950, settle_value: 193.7875, settle_ccy: 'USD', cash_value: 169.89, cash_ccy: 'GBP', cash_fx_to_portfolio: 1 }));
     expect(holding.base_cost_reliable).toBe(true);
     expect(holding.base_realised_value).toBeCloseTo(169.89 - (196.6 + 371.46), 6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// base_realised_reliable — realised-P/L reliability must survive a full close
+// ---------------------------------------------------------------------------
+// Fixes the bug found during the Definition B activation-readiness audit:
+// base_cost_reliable resets to true on full closure (correct for the OPEN
+// cost snapshot — see its updated doc comment in src/lib/queries.ts), but
+// that same reset used to be the ONLY signal available, silently un-flagging
+// a cumulative base_realised_value that may already contain a permanent,
+// unrecoverable gap from an earlier skipped disposal. base_realised_reliable
+// is a separate, NEVER-resetting flag for exactly that cumulative figure.
+
+describe('base_realised_reliable — unreliable TIN then a full SELL', () => {
+  it('the close resets base_cost_reliable (open) but base_realised_reliable (cumulative) stays false', () => {
+    const holding = makeHolding({ asset_id: 'a1', ticker: 'FOO', currency: 'USD', base_currency: 'GBP' });
+    // Unresolved TIN: taints the open-cost dimension immediately.
+    applyTransactionToHolding(holding, makeTxn({ type: 'TIN', quantity: 100, settle_value: 5000, settle_ccy: 'USD' }));
+    expect(holding.base_cost_reliable).toBe(false);
+    expect(holding.base_realised_reliable).toBe(true); // nothing realised yet — correctly still true
+
+    // Full close while the cost basis is unreliable — its contribution is skipped.
+    applyTransactionToHolding(holding, makeTxn({ type: 'SELL', quantity: 100, settle_value: 5500, settle_ccy: 'USD', cash_value: 4000, cash_ccy: 'GBP', cash_fx_to_portfolio: 0.8 }));
+
+    expect(holding.total_shares).toBe(0);
+    expect(holding.base_cost_reliable).toBe(true); // open dimension: correctly reset, nothing open left to distrust
+    expect(holding.base_realised_reliable).toBe(false); // cumulative dimension: permanently tainted, NOT reset
+    expect(holding.base_realised_value).toBe(0); // the skipped disposal contributed nothing — not fabricated
+  });
+});
+
+describe('base_realised_reliable — unreliable TIN, full SELL, then a later genuinely-new reliable BUY/SELL', () => {
+  it('the reopened position is individually correct, but the cumulative realised total stays flagged unreliable forever', () => {
+    const holding = makeHolding({ asset_id: 'a1', ticker: 'FOO', currency: 'USD', base_currency: 'GBP' });
+    applyTransactionToHolding(holding, makeTxn({ type: 'TIN', quantity: 100, settle_value: 5000, settle_ccy: 'USD' }));
+    applyTransactionToHolding(holding, makeTxn({ type: 'SELL', quantity: 100, settle_value: 5500, settle_ccy: 'USD', cash_value: 4000, cash_ccy: 'GBP', cash_fx_to_portfolio: 0.8 }));
+    expect(holding.base_realised_reliable).toBe(false);
+
+    // A genuinely new, fully-reliable lot — no connection to the old TIN.
+    applyTransactionToHolding(holding, makeTxn({ type: 'BUY', quantity: 50, price: 20, fee: 0, settle_value: 1000, settle_ccy: 'USD', cash_value: 800, cash_ccy: 'GBP', cash_fx_to_portfolio: 0.8 }));
+    expect(holding.base_cost_reliable).toBe(true); // open dimension: correctly trustworthy again
+    expect(holding.base_total_cost).toBeCloseTo(800, 6); // clean — no contamination from the old TIN
+
+    applyTransactionToHolding(holding, makeTxn({ type: 'SELL', quantity: 50, settle_value: 1200, settle_ccy: 'USD', cash_value: 1000, cash_ccy: 'GBP', cash_fx_to_portfolio: 0.833 }));
+    // This SELL's own contribution (1000 - 800 = 200) is computed and added —
+    // individually correct — but the cumulative total still carries the
+    // earlier unrecoverable gap, so it must stay flagged unreliable.
+    expect(holding.base_realised_value).toBeCloseTo(200, 6);
+    expect(holding.base_realised_reliable).toBe(false);
+  });
+});
+
+describe('base_realised_reliable — mixed reliable/unreliable lots', () => {
+  it('one unreliable BUY among reliable ones taints a later partial SELL\'s realised contribution permanently', () => {
+    const holding = makeHolding({ asset_id: 'a1', ticker: 'FOO', currency: 'USD', base_currency: 'GBP' });
+    applyTransactionToHolding(holding, makeTxn({ type: 'BUY', quantity: 100, price: 10, fee: 0, settle_value: 1000, settle_ccy: 'USD', cash_value: 800, cash_ccy: 'GBP', cash_fx_to_portfolio: 0.8 }));
+    expect(holding.base_cost_reliable).toBe(true);
+
+    // Unreliable BUY: cash_ccy doesn't match the portfolio base currency.
+    applyTransactionToHolding(holding, makeTxn({ type: 'BUY', quantity: 100, price: 10, fee: 0, settle_value: 1000, settle_ccy: 'USD', cash_value: 800, cash_ccy: 'EUR' }));
+    expect(holding.base_cost_reliable).toBe(false);
+
+    applyTransactionToHolding(holding, makeTxn({ type: 'SELL', quantity: 50, settle_value: 600, settle_ccy: 'USD', cash_value: 480, cash_ccy: 'GBP', cash_fx_to_portfolio: 0.8 }));
+    expect(holding.base_realised_reliable).toBe(false);
+    expect(holding.total_shares).toBe(150); // not fully closed — base_cost_reliable has nothing to reset yet
+    expect(holding.base_cost_reliable).toBe(false);
+  });
+});
+
+describe('base_realised_reliable — resolved matched transfer never taints realised reliability', () => {
+  it('a linked TIN (via applyTransferIn) followed by a SELL keeps base_realised_reliable true', () => {
+    const source = makeHolding({ asset_id: 'a1', ticker: 'FOO', currency: 'USD', base_currency: 'GBP', total_shares: 100, total_cost: 1000, base_total_cost: 800, base_cost_reliable: true });
+    const transferOutParcel = applyTransferOut(source, 100);
+    const dest = makeHolding({ asset_id: 'a1', ticker: 'FOO', currency: 'USD', base_currency: 'GBP' });
+    applyTransferIn(dest, transferOutParcel);
+    expect(dest.base_cost_reliable).toBe(true);
+    expect(dest.base_realised_reliable).toBeUndefined(); // never touched — a resolved transfer never realises anything
+
+    applyTransactionToHolding(dest, makeTxn({ type: 'SELL', quantity: 100, settle_value: 1200, settle_ccy: 'USD', cash_value: 1000, cash_ccy: 'GBP', cash_fx_to_portfolio: 0.833 }));
+    expect(dest.base_realised_reliable).toBe(true);
+    expect(dest.base_realised_value).toBeCloseTo(1000 - 800, 6);
+  });
+});
+
+describe('base_realised_reliable — normal BUY/SELL lifecycle, never touched by a transfer', () => {
+  it('stays true throughout multiple reliable buy/sell cycles', () => {
+    const holding = makeHolding({ asset_id: 'a1', ticker: 'FOO', currency: 'USD', base_currency: 'GBP' });
+    applyTransactionToHolding(holding, makeTxn({ type: 'BUY', quantity: 100, price: 10, fee: 0, settle_value: 1000, settle_ccy: 'USD', cash_value: 800, cash_ccy: 'GBP', cash_fx_to_portfolio: 0.8 }));
+    applyTransactionToHolding(holding, makeTxn({ type: 'SELL', quantity: 100, settle_value: 1200, settle_ccy: 'USD', cash_value: 1000, cash_ccy: 'GBP', cash_fx_to_portfolio: 0.833 }));
+    expect(holding.base_realised_reliable).toBe(true);
+
+    applyTransactionToHolding(holding, makeTxn({ type: 'BUY', quantity: 50, price: 20, fee: 0, settle_value: 1000, settle_ccy: 'USD', cash_value: 780, cash_ccy: 'GBP', cash_fx_to_portfolio: 0.78 }));
+    applyTransactionToHolding(holding, makeTxn({ type: 'SELL', quantity: 50, settle_value: 1100, settle_ccy: 'USD', cash_value: 850, cash_ccy: 'GBP', cash_fx_to_portfolio: 0.77 }));
+    expect(holding.base_realised_reliable).toBe(true);
+    expect(holding.base_realised_value).toBeCloseTo((1000 - 800) + (850 - 780), 6);
+  });
+});
+
+describe('base_realised_reliable — zero-cost but verified holding (POLB.L shape)', () => {
+  it('a genuine £0 BUY stays reliable and available, never confused with "unavailable"', () => {
+    const holding = makeHolding({ asset_id: 'polb', ticker: 'POLB.L', currency: 'GBP', base_currency: 'GBP' });
+    applyTransactionToHolding(holding, makeTxn({ type: 'BUY', quantity: 48337, price: 0, fee: 0, settle_value: 0, settle_ccy: 'GBP', cash_value: 0, cash_ccy: 'GBP', cash_fx_to_portfolio: 0 }));
+    expect(holding.base_cost_reliable).toBe(true);
+    expect(holding.base_total_cost).toBe(0);
+    expect(holding.base_realised_reliable).toBe(true); // never touched — no disposal has happened
   });
 });
