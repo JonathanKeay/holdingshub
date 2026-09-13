@@ -10,11 +10,13 @@ import type { Portfolio } from '@/types/supabase';
 import { applyTransferIn } from './transferCostBasis';
 import {
   indexResolvedTransfersByTinTransactionId,
+  indexResolvedTransfersByOutTransactionId,
   resolveTransferParcelForTin,
+  resolveTransferParcelForTot,
   type ResolvedTransferForReplay,
   type ResolvedTransferLookup,
 } from './holdingsTransferIntegration';
-import { resolveRealisedCcy } from './definitionBDisplay';
+import { resolveRealisedCcy, resolveDefinitionBBaseCurrencies } from './definitionBDisplay';
 
 // ----------------------------- Types -----------------------------
 
@@ -145,6 +147,16 @@ const ALWAYS_CASH_TYPES = new Set(['DIV', 'INT']);
 // BUY, which enters the same top-level `if` but matches none of the inner
 // type-specific cases (DIV/INT/FEE/SELL) and so never affects realised_value.
 const REALISED_AFFECTING_TYPES = new Set(['SELL', 'DIV', 'INT', 'FEE']);
+
+// The exact set of transaction types that touch total_cost/base_total_cost
+// in applyTransactionToHolding's native and Definition B ledgers (BUY/SELL
+// directly; TIN/TOT via the transfer-aware dispatch). Used by
+// getAllHoldingsAndCashSummary to determine which portfolios' base currency
+// actually matters for a blended ticker's Definition B open-cost ledger —
+// deliberately NOT REALISED_AFFECTING_TYPES, since DIV/INT/FEE never touch
+// total_cost at all (and DIV/INT never even reach this function's holdings
+// replay — see ALWAYS_CASH_TYPES).
+const OPEN_COST_AFFECTING_TYPES = new Set(['BUY', 'SELL', 'TIN', 'TOT']);
 
 // --------------------------- Utilities ---------------------------
 
@@ -499,12 +511,13 @@ export function applyTransactionToHolding(holding: Holding, txn: Txn) {
 export function applyTransactionToHoldingResolvingTransfers(
   holding: Holding,
   txn: Txn,
-  resolvedTinTransfers: ResolvedTransferLookup
+  resolvedTinTransfers: ResolvedTransferLookup,
+  resolvedTotTransfers?: ResolvedTransferLookup
 ) {
-  const parcel = resolveTransferParcelForTin(txn, resolvedTinTransfers, holding);
-  if (parcel) {
+  const tinParcel = resolveTransferParcelForTin(txn, resolvedTinTransfers, holding);
+  if (tinParcel) {
     try {
-      applyTransferIn(holding, parcel);
+      applyTransferIn(holding, tinParcel);
       return;
     } catch (err) {
       // A live, user-facing holdings computation must never break because
@@ -516,7 +529,65 @@ export function applyTransactionToHoldingResolvingTransfers(
       );
     }
   }
+
+  const totParcel = resolvedTotTransfers
+    ? resolveTransferParcelForTot(txn, resolvedTotTransfers, holding)
+    : null;
+
+  // Capture reliability BEFORE the plain TOT branch runs its unconditional
+  // "mark unreliable" step, so the correction below can tell "this TOT is
+  // what just tainted it" apart from "it was already unreliable for an
+  // unrelated reason" — only the former should ever be corrected. See the
+  // block comment after this call for the full rationale.
+  const wasBaseCostReliableBeforeTot =
+    totParcel && holding.base_currency ? (holding.base_cost_reliable ?? true) : undefined;
+
   applyTransactionToHolding(holding, txn);
+
+  if (totParcel && holding.base_currency && wasBaseCostReliableBeforeTot) {
+    // -------------------------------------------------------------------
+    // Definition B correction for a RESOLVED transfer-out.
+    //
+    // applyTransactionToHolding's plain TOT branch (queries.ts, above)
+    // unconditionally marks base_cost_reliable false and never touches
+    // base_total_cost — a sound default when nothing more is known about
+    // the transfer. But when this TOT has a resolved (matched/
+    // external_out) transfer record, its base cost was already captured
+    // once, authoritatively, at the moment it became a pending_out row
+    // (transferCostBasis.applyTransferOut, run against the SOURCE
+    // portfolio's own isolated holding — see transfers.ts's
+    // captureTransferOut). That frozen parcel is exactly as trustworthy as
+    // the frozen parcel a resolved TIN already gets via applyTransferIn,
+    // so the same holding must not be left flagged unreliable here either.
+    //
+    // This is skipped (and the plain branch's taint stands) whenever:
+    //  - the holding's base ledger was ALREADY unreliable before this TOT,
+    //    for some earlier, unrelated reason — a known-good OUT parcel for
+    //    THIS transfer cannot retroactively repair a DIFFERENT gap, so
+    //    nothing is "laundered" back to reliable;
+    //  - total_shares reached exactly zero as a result of this TOT — the
+    //    plain branch's own full-close reset already fired above and
+    //    correctly set base_total_cost=0/reliable=true; applying a second
+    //    (now-stale) correction on top would double-subtract;
+    //  - the resolved parcel itself has no known baseCost (e.g. an
+    //    external_out with cost never supplied) — "resolved" only means
+    //    the transfer is linked, not that its base cost is known.
+    if (holding.total_shares !== 0 && totParcel.baseCost != null && totParcel.baseCcy) {
+      const baseCcy = holding.base_currency.toUpperCase();
+      const parcelBaseCcy = totParcel.baseCcy.toUpperCase();
+      if (parcelBaseCcy !== baseCcy) {
+        console.error(
+          `applyTransactionToHoldingResolvingTransfers: resolved transfer-out base-currency mismatch for TOT ` +
+            `${txn.id} (holding ${baseCcy}, parcel ${parcelBaseCcy}); leaving base_cost_reliable=false for this row.`
+        );
+      } else {
+        holding.base_total_cost = (holding.base_total_cost ?? 0) - totParcel.baseCost;
+        holding.base_cost_reliable = true;
+        holding.base_avg_cost =
+          holding.total_shares > 0 ? holding.base_total_cost / holding.total_shares : undefined;
+      }
+    }
+  }
 }
 
 // --------------------- Cash (multi-ccy ledgers) ---------------------
@@ -795,15 +866,19 @@ export async function getPortfoliosWithHoldingsAndCash(
 
   const txns = stableSortTx<Txn>(txnsRaw as Txn[]);
 
-  // Resolved transfers (matched/external_in only) — ONE query for the whole
-  // replay, never per portfolio or per transaction. Indexed once by
-  // in_transaction_id below; pending_out/pending_in rows are never fetched
-  // at all, since they have no effect on holdings in this phase.
+  // Resolved transfers — ONE query for the whole replay, never per
+  // portfolio or per transaction. matched/external_in resolve a TIN leg;
+  // matched/external_out resolve a TOT leg (matched rows carry both).
+  // pending_out/pending_in rows are never fetched at all, since they have
+  // no effect on holdings in this phase.
   const { data: transfersRaw } = await supabase
     .from('transfers')
-    .select('id, status, in_transaction_id, quantity, native_cost, native_ccy, base_cost, base_ccy')
-    .in('status', ['matched', 'external_in']);
+    .select('id, status, out_transaction_id, in_transaction_id, quantity, native_cost, native_ccy, base_cost, base_ccy')
+    .in('status', ['matched', 'external_in', 'external_out']);
   const resolvedTinTransfers = indexResolvedTransfersByTinTransactionId(
+    (transfersRaw ?? []) as ResolvedTransferForReplay[]
+  );
+  const resolvedTotTransfers = indexResolvedTransfersByOutTransactionId(
     (transfersRaw ?? []) as ResolvedTransferForReplay[]
   );
 
@@ -870,10 +945,18 @@ export async function getPortfoliosWithHoldingsAndCash(
           realised_value: 0,
           realised_cost: 0,
           realised_proceeds: 0,
+          // Definition B activation: each portfolio has exactly one base
+          // currency, so this is unambiguous — set BEFORE replay so
+          // applyTransactionToHoldingResolvingTransfers's Definition B block
+          // (gated on holding.base_currency) runs for every transaction,
+          // not just ones after some later discovery. See
+          // getAllHoldingsAndCashSummary below for the ambiguous,
+          // cross-portfolio case, which needs a two-pass resolution first.
+          base_currency: baseCurrency,
         };
       }
 
-      applyTransactionToHoldingResolvingTransfers(holdingsMap[ticker], txn, resolvedTinTransfers);
+      applyTransactionToHoldingResolvingTransfers(holdingsMap[ticker], txn, resolvedTinTransfers, resolvedTotTransfers);
     }
 
     // Cash balances (multi-ccy)
@@ -931,13 +1014,16 @@ export async function getAllHoldingsAndCashSummary(
   const txnsAll = stableSortTx<Txn>(txnsRaw as Txn[]);
   const txns = filterAsOf(txnsAll, opts?.asOf);
 
-  // Resolved transfers (matched/external_in only) — ONE query for the whole
-  // replay. See getPortfoliosWithHoldingsAndCash's identical comment.
+  // Resolved transfers — ONE query for the whole replay. See
+  // getPortfoliosWithHoldingsAndCash's identical comment.
   const { data: transfersRaw } = await supabase
     .from('transfers')
-    .select('id, status, in_transaction_id, quantity, native_cost, native_ccy, base_cost, base_ccy')
-    .in('status', ['matched', 'external_in']);
+    .select('id, status, out_transaction_id, in_transaction_id, quantity, native_cost, native_ccy, base_cost, base_ccy')
+    .in('status', ['matched', 'external_in', 'external_out']);
   const resolvedTinTransfers = indexResolvedTransfersByTinTransactionId(
+    (transfersRaw ?? []) as ResolvedTransferForReplay[]
+  );
+  const resolvedTotTransfers = indexResolvedTransfersByOutTransactionId(
     (transfersRaw ?? []) as ResolvedTransferForReplay[]
   );
 
@@ -968,6 +1054,27 @@ export async function getAllHoldingsAndCashSummary(
 
   holdingsTxns.sort(compareTxForHoldings);
 
+  // Definition B activation (global/blended view): a ticker's open-cost
+  // ledger (base_total_cost, and — through it — base_realised_*) may only
+  // be opted into Definition B here if every portfolio that ever fed it a
+  // BUY/SELL/TIN/TOT shares ONE base currency. This MUST be resolved in a
+  // pre-scan, before any holding is constructed below: base_currency has to
+  // be present from the very first transaction applied, because
+  // applyTransactionToHolding's Definition B block is gated on it at every
+  // step — setting it retroactively after replay would leave every
+  // already-processed transaction's contribution un-accumulated. A
+  // genuinely mixed ticker is simply never opted in (base_currency stays
+  // unset for it), preserving today's dormant/legacy behaviour rather than
+  // guessing — re-derived from real data each call, never hard-coded to
+  // specific tickers.
+  const tickerDefBBaseCcy = resolveDefinitionBBaseCurrencies(
+    holdingsTxns
+      .filter((t) => assetMeta[t.asset_id])
+      .map((t) => ({ ticker: assetMeta[t.asset_id].ticker, type: (t.type ?? '').toUpperCase(), portfolioId: (t as any).portfolio_id as string })),
+    portfolioBaseCcyById,
+    OPEN_COST_AFFECTING_TYPES
+  );
+
   // Tracks which portfolio-base currency(ies) actually fed each ticker's
   // blended realised_value. This table blends a ticker's holdings across
   // ALL portfolios, which may not share one base currency — h.currency
@@ -995,6 +1102,12 @@ export async function getAllHoldingsAndCashSummary(
         realised_value: 0,
         realised_cost: 0,
         realised_proceeds: 0,
+        // Definition B activation: only opted in when every contributing
+        // portfolio's BUY/SELL/TIN/TOT activity shares one base currency
+        // (see the pre-scan above). A genuinely mixed ticker is left with
+        // base_currency unset — the existing dormant/legacy path handles it
+        // exactly as it always has, never a guessed figure.
+        ...(tickerDefBBaseCcy[ticker] ? { base_currency: tickerDefBBaseCcy[ticker] } : {}),
       };
     }
 
@@ -1015,7 +1128,7 @@ export async function getAllHoldingsAndCashSummary(
       }
     }
 
-    applyTransactionToHoldingResolvingTransfers(holdingsMap[ticker], txn, resolvedTinTransfers);
+    applyTransactionToHoldingResolvingTransfers(holdingsMap[ticker], txn, resolvedTinTransfers, resolvedTotTransfers);
   }
 
   // Attach the resolved domain: a single ISO code if every contributing

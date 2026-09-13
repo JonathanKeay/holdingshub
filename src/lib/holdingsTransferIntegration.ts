@@ -20,12 +20,21 @@ import type { TransferRecord } from './transfers';
 /** Only the fields actually needed from a transfers row, to keep the query this is built from minimal. */
 export type ResolvedTransferForReplay = Pick<
   TransferRecord,
-  'id' | 'status' | 'in_transaction_id' | 'quantity' | 'native_cost' | 'native_ccy' | 'base_cost' | 'base_ccy'
+  | 'id'
+  | 'status'
+  | 'out_transaction_id'
+  | 'in_transaction_id'
+  | 'quantity'
+  | 'native_cost'
+  | 'native_ccy'
+  | 'base_cost'
+  | 'base_ccy'
 >;
 
-export type ResolvedTransferLookup = Map<string, ResolvedTransferForReplay>; // keyed by in_transaction_id
+export type ResolvedTransferLookup = Map<string, ResolvedTransferForReplay>; // keyed by in_transaction_id, or by out_transaction_id — see the two index functions below
 
 const RESOLVED_STATUSES = new Set(['matched', 'external_in']);
+const RESOLVED_OUT_STATUSES = new Set(['matched', 'external_out']);
 
 /**
  * Builds the in_transaction_id -> resolved transfer lookup from a batch of
@@ -41,6 +50,26 @@ export function indexResolvedTransfersByTinTransactionId(
   for (const t of transfers) {
     if (RESOLVED_STATUSES.has(t.status) && t.in_transaction_id) {
       map.set(t.in_transaction_id, t);
+    }
+  }
+  return map;
+}
+
+/**
+ * Builds the out_transaction_id -> resolved transfer lookup — the TOT-side
+ * mirror of indexResolvedTransfersByTinTransactionId. Filters to
+ * matched/external_out (the only statuses whose out leg is resolved); a
+ * pending_out row is simply ignored, exactly as a pending_in is on the TIN
+ * side. Callers may pass the SAME transfers array fetched for the TIN index
+ * — one query serves both, since both are pure filters over the same rows.
+ */
+export function indexResolvedTransfersByOutTransactionId(
+  transfers: ResolvedTransferForReplay[]
+): ResolvedTransferLookup {
+  const map: ResolvedTransferLookup = new Map();
+  for (const t of transfers) {
+    if (RESOLVED_OUT_STATUSES.has(t.status) && t.out_transaction_id) {
+      map.set(t.out_transaction_id, t);
     }
   }
   return map;
@@ -75,6 +104,47 @@ export function resolveTransferParcelForTin(
     // by the transfers table's own chk_native_cost_by_status constraint.
     nativeCost: resolved.native_cost as number,
     nativeCcy: resolved.native_ccy as string,
+    baseCost: resolved.base_cost ?? undefined,
+    baseCcy: resolved.base_ccy ?? undefined,
+  };
+}
+
+/**
+ * The TOT-side mirror of resolveTransferParcelForTin. Returns the frozen
+ * CostParcel a resolved transfer's OUT leg carries for `txn`, or null if
+ * `txn` is not a TOT, or has no matched/external_out transfer record.
+ *
+ * Unlike the TIN side, this parcel is never applied wholesale to a holding
+ * (a source holding already removes its own shares/cost via the ordinary
+ * TOT arithmetic in applyTransactionToHolding — that must stay exactly as
+ * it is, since it is native-ledger arithmetic already proven correct for
+ * both a single-portfolio and a blended/global holding). What this parcel
+ * IS used for is correcting Definition B's base-currency ledger only: the
+ * plain TOT branch conservatively marks base_cost_reliable false because —
+ * absent a resolved transfer — the shares' true carried-forward base cost
+ * is unknowable. Once a transfer is resolved, that base cost IS known
+ * (captured once, at the moment the TOT was first turned into a pending_out
+ * row — see transfers.ts's captureTransferOut), so the conservative taint
+ * is no longer warranted and can be corrected using this parcel's
+ * baseCost/baseCcy. See applyTransactionToHoldingResolvingTransfers in
+ * queries.ts for exactly how/when that correction is applied.
+ */
+export function resolveTransferParcelForTot(
+  txn: Txn,
+  resolvedTotTransfers: ResolvedTransferLookup,
+  holding: Pick<Holding, 'asset_id' | 'ticker'>
+): CostParcel | null {
+  if ((txn.type ?? '').toUpperCase() !== 'TOT') return null;
+  const resolved = resolvedTotTransfers.get(txn.id);
+  if (!resolved) return null;
+  if (resolved.native_cost == null || !resolved.native_ccy) return null;
+
+  return {
+    assetId: holding.asset_id,
+    ticker: holding.ticker,
+    quantity: resolved.quantity,
+    nativeCost: resolved.native_cost,
+    nativeCcy: resolved.native_ccy,
     baseCost: resolved.base_cost ?? undefined,
     baseCcy: resolved.base_ccy ?? undefined,
   };

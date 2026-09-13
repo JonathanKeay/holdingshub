@@ -20,6 +20,7 @@ function resolvedTransfer(
 ): ResolvedTransferForReplay {
   return {
     status: 'matched',
+    out_transaction_id: null,
     quantity: 0,
     native_cost: 0,
     native_ccy: 'USD',
