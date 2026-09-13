@@ -94,17 +94,57 @@ describe('T23 target — USD-base portfolio: Definition B applies in USD, GBP is
   );
 });
 
-describe('T13 target — linked TOT/TIN transfers should carry cost basis forward (future preferred behaviour, NOT implemented now)', () => {
+describe('T13 target — linked TOT/TIN transfers should carry cost basis forward (arrival-order-independent; pure arithmetic now implemented, persistence/matching layer NOT implemented)', () => {
   it.todo(
-    'PENDING: explicitly deferred. Today, and for this A1 pass, a security TIN\'s cost basis ' +
-    'is whatever is supplied on that row (see current-behaviour.positions.spec.ts T13) — for a ' +
-    'transfer between two HoldingsHub portfolios, that is currently the notional portfolio-base ' +
-    'transfer value, used as a fallback where no carried-forward historical cost is available. ' +
-    'The agreed future direction is that a linked TOT->TIN transfer should instead carry both ' +
-    'the native-currency AND portfolio-base historical cost basis forward from the source ' +
-    'holding, rather than resetting to transfer-date market/notional value. No linking mechanism ' +
-    'or UI warning is being built now — this test exists only to record the intended direction ' +
-    'so it is not forgotten, and so the current fallback (tested and passing above) is not ' +
-    'mistaken for the final design.'
+    'PARTIALLY IMPLEMENTED: the pure arithmetic for this is now real, tested code — see ' +
+    'tests/financial/transfer-cost-basis.spec.ts, exercising src/lib/transferCostBasis.ts\'s ' +
+    'applyTransferOut()/applyTransferIn(). Given a CONFIRMED link, a destination correctly ' +
+    'inherits the source\'s native-currency cost (and, once Definition B exists, its ' +
+    'portfolio-base cost) exactly, regardless of which leg was recorded first or how much time ' +
+    'passed between them — proven directly against the real PLTR/PYPL/POLB.L figures. What ' +
+    'remains PENDING and is NOT built is everything about deciding a link exists: a persistence ' +
+    'model for an unmatched transfer-out, an unmatched transfer-in, and a confirmed match ' +
+    '(see the transfer pending/matching design — a dedicated transfer record, not a fuzzy ' +
+    'inference, given real data already shows two genuinely different transfers sharing an ' +
+    'identical note-text pattern); the matching-suggestion logic itself; and the wiring that ' +
+    'calls applyTransferOut()/applyTransferIn() only once a link is confirmed. ' +
+    'applyTransactionToHolding()\'s existing TIN/TOT branches (current-behaviour.positions.spec.ts ' +
+    'T13/T14) are unchanged and still handle every TIN/TOT row today, linked or not.'
+  );
+});
+
+describe('T13b target — pending state: TOT arrives first, no matching TIN yet', () => {
+  it.todo(
+    'PENDING: no persistence model exists yet for "unmatched transfer-out". Intended direction: ' +
+    'recording a TOT removes shares/cost from the source exactly as today (unchanged — this part ' +
+    'is a real disposal-free removal already), and captures its cost parcel (applyTransferOut()\'s ' +
+    'return value, or the equivalent) against a pending transfer record — not yet linked to any ' +
+    'destination. It must remain visibly "pending/unmatched" (not silently treated as an external ' +
+    'transfer-out, which is a different, already-final state) until the user confirms either a ' +
+    'match to a later TIN or that it truly has no HoldingsHub-tracked destination.'
+  );
+});
+
+describe('T13c target — pending state: TIN arrives first, no matching TOT yet', () => {
+  it.todo(
+    'PENDING: no persistence model exists yet for "unmatched transfer-in". Intended direction: ' +
+    'shares still appear on the destination holding immediately (the user genuinely holds them), ' +
+    'but the cost basis must be marked unverified/pending rather than permanently set from ' +
+    'transfer-date market value — today\'s deriveAssetCostForTIN() fallback (current-behaviour.' +
+    'positions.spec.ts T13) is explicitly a provisional placeholder in this state, not a verified ' +
+    'figure. If a matching TOT later arrives and is confirmed, applyTransferIn() must be able to ' +
+    'REPLACE the provisional cost with the true carried-forward parcel — this is a correction, not ' +
+    'an accumulation. If the user instead confirms it is an external transfer-in, the placeholder ' +
+    'is replaced by whatever historical cost the user explicitly supplies — never invented.'
+  );
+});
+
+describe('T13d target — an unmatched/pending TIN must not silently be treated as a verified market-value cost', () => {
+  it.todo(
+    'PENDING: same dependency as T13c. Any downstream figure derived from an unverified TIN\'s ' +
+    'cost (unrealised gain/loss, performance reporting) must be visibly flagged as provisional ' +
+    'while pending — never presented with the same confidence as a verified BUY or a resolved ' +
+    'linked transfer. Quantity/current value are real and must still display normally; only ' +
+    'cost-derived figures carry the pending flag.'
   );
 });
