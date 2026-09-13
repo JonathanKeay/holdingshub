@@ -48,51 +48,22 @@ describe('T12b — FEE target: a standalone FEE attributed to a security must al
 // ---------------------------------------------------------------------------
 // T5 / T19 / T23 — Definition B: parallel portfolio-base cost ledger
 // ---------------------------------------------------------------------------
-// No function implementing this exists anywhere in the codebase today (confirmed
-// by reading src/lib/queries.ts in full) — applyTransactionToHolding tracks
-// cost basis only in the asset's native currency. Writing a stub function
-// here to exercise would misrepresent unimplemented behaviour as tested
-// production code, so these are recorded as `test.todo` with the full
-// worked numbers, for whoever implements the parallel ledger.
-
-describe('T5 target — Definition B realised P/L for a GBP-base portfolio + USD asset', () => {
-  it.todo(
-    'PENDING: requires a new parallel portfolio-base cost-basis accumulator (average-cost, ' +
-    'proportional removal on partial sale) alongside total_cost — see Workstream: Cash/FX ' +
-    'Definition B implementation. Worked example: BUY settle_value=$5,002, actual GBP cash ' +
-    'paid=£4,001.60 (implied FX 0.80). SELL settle_value=$5,497, actual GBP cash received=' +
-    '£4,122.75 (implied FX 0.75). Target realised P/L (portfolio-base/GBP) = 4,122.75 - ' +
-    '4,001.60 = +£121.15. Native (USD) realised P/L must be preserved separately and equals ' +
-    '5,497 - 5,002 = +$495.00 (already correctly produced by today\'s code in the asset ' +
-    'currency domain). Decomposition to keep, for later reporting: native return translated ' +
-    'at disposal-date FX = 495 * 0.75 = £371.25 (this is today\'s current-behaviour figure, ' +
-    'exercised in current-behaviour.fx-realised.spec.ts — it is not discarded, just relabelled ' +
-    'as one named component); FX effect on cost = 4,001.60 - (5,002 * 0.75 = 3,751.50) = ' +
-    '£250.10; check: 371.25 - 250.10 = 121.15.'
-  );
-});
-
-describe('T19 target — partial sale must not leak value between the native and portfolio-base ledgers', () => {
-  it.todo(
-    'PENDING: same dependency as T5. Invariant to enforce once the parallel ledger exists: ' +
-    'for a partial sale, (portfolio-base cost removed) + (portfolio-base cost remaining) must ' +
-    'sum back to the original portfolio-base acquisition cost, independently of the equivalent ' +
-    'invariant already holding for the native-currency ledger (see current-behaviour tests). ' +
-    'This guards against an implementation that derives one ledger from the other via a single ' +
-    'stored FX rate instead of maintaining both as genuinely independent running totals.'
-  );
-});
-
-describe('T23 target — USD-base portfolio: Definition B applies in USD, GBP is reporting-layer only', () => {
-  it.todo(
-    'PENDING: same dependency as T5, but for a USD-base portfolio the "portfolio-base" ledger ' +
-    'is denominated in USD, not GBP — actual USD cash out vs actual USD cash in, using ' +
-    'cash_fx_to_portfolio to convert a EUR- (or other-) denominated settle amount into USD, ' +
-    'exactly parallel to the GBP case. GBP must only enter at the consolidated cross-portfolio ' +
-    'reporting layer as a spot-rate translation of the finished USD figure — never as a second ' +
-    'parallel ledger for this portfolio.'
-  );
-});
+// IMPLEMENTED. applyTransactionToHolding gained a fully additive, opt-in
+// Definition B block (holding.base_currency / base_total_cost / base_avg_cost
+// / base_cost_reliable / base_realised_value, etc — see src/lib/queries.ts).
+// These three scenarios are now real, passing tests in
+// tests/financial/definitionB-base-cost.spec.ts, with the exact worked
+// numbers this block used to record: T5's £121.15 (vs the preserved,
+// unchanged current-behaviour £371.15 figure), T19's cost-conservation
+// invariant proven independently of the native ledger, and T23's USD-base
+// case. Removed from here (rather than left as stale it.todo) so this file
+// keeps meaning "not yet built" — see git history for the original text.
+//
+// Still NOT built: wiring this into getPortfoliosWithHoldingsAndCash /
+// getAllHoldingsAndCashSummary (no caller sets base_currency yet, so this
+// remains dormant in the live app), and TIN/TOT base-cost carry-forward
+// (blocked on the same transfer-linking persistence layer as T13 below —
+// until then, any TIN/TOT taints base_cost_reliable rather than guessing).
 
 describe('T13 target — linked TOT/TIN transfers should carry cost basis forward (arrival-order-independent; pure arithmetic now implemented, persistence/matching layer NOT implemented)', () => {
   it.todo(

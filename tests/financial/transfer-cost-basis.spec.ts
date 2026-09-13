@@ -167,6 +167,50 @@ describe('Transfer-parcel T-currency-guard — a mismatched parcel is rejected, 
   });
 });
 
+describe('Transfer-parcel + Definition B — baseCost/baseCcy carry-forward (additive; source/destination opt in via base_currency)', () => {
+  it('a reliable source base ledger produces a parcel.baseCost, credited to the destination exactly like native cost', () => {
+    const source = makeHolding({ asset_id: 'a1', ticker: 'FOO', currency: 'USD', base_currency: 'GBP', total_shares: 200, total_cost: 2000, base_total_cost: 1700, base_cost_reliable: true });
+    const dest = makeHolding({ asset_id: 'a1', ticker: 'FOO', currency: 'USD', base_currency: 'GBP' });
+
+    const parcel = applyTransferOut(source, 50);
+    expect(parcel.baseCost).toBeCloseTo(425, 6); // 1700 * (50/200) — the worked example from the design review
+    expect(parcel.baseCcy).toBe('GBP');
+    expect(source.base_total_cost).toBeCloseTo(1275, 6);
+
+    applyTransferIn(dest, parcel);
+    expect(dest.base_total_cost).toBeCloseTo(425, 6);
+    expect(dest.base_cost_reliable).toBe(true);
+  });
+
+  it('an unreliable source base ledger produces no parcel.baseCost, and taints the destination rather than inventing a figure', () => {
+    const source = makeHolding({ asset_id: 'a1', ticker: 'FOO', currency: 'USD', base_currency: 'GBP', total_shares: 100, total_cost: 1000, base_total_cost: 800, base_cost_reliable: false });
+    const dest = makeHolding({ asset_id: 'a1', ticker: 'FOO', currency: 'USD', base_currency: 'GBP' });
+
+    const parcel = applyTransferOut(source, 100);
+    expect(parcel.baseCost).toBeUndefined();
+    expect(parcel.baseCcy).toBeUndefined();
+
+    applyTransferIn(dest, parcel);
+    expect(dest.base_cost_reliable).toBe(false);
+  });
+
+  it('a destination that does not track Definition B at all is unaffected by a parcel carrying baseCost', () => {
+    const source = makeHolding({ asset_id: 'a1', ticker: 'FOO', currency: 'USD', base_currency: 'GBP', total_shares: 100, total_cost: 1000, base_total_cost: 900, base_cost_reliable: true });
+    const dest = makeHolding({ asset_id: 'a1', ticker: 'FOO', currency: 'USD' }); // no base_currency set
+
+    const parcel = applyTransferOut(source, 100);
+    applyTransferIn(dest, parcel);
+    expect(dest.base_total_cost).toBeUndefined();
+  });
+
+  it('throws on a base-currency mismatch between destination and parcel', () => {
+    const dest = makeHolding({ asset_id: 'a1', ticker: 'FOO', currency: 'USD', base_currency: 'EUR' });
+    expect(() =>
+      applyTransferIn(dest, { assetId: 'a1', ticker: 'FOO', quantity: 10, nativeCost: 100, nativeCcy: 'USD', baseCost: 90, baseCcy: 'GBP' })
+    ).toThrow(/base-currency mismatch/);
+  });
+});
+
 describe('Transfer-parcel T-real-data — PLTR/PYPL/POLB.L (HGLD ISA STK -> IBKR ISA STK, 2025-06-02)', () => {
   // Figures independently verified against the local dev database (see the
   // TIN/TOT investigation): each source BUY's real settle_value/cash_value,

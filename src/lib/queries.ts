@@ -23,6 +23,26 @@ export type Holding = {
   realised_value?: number;      // realised P/L in the proceeds (cash) currency domain
   realised_cost?: number;
   realised_proceeds?: number;
+
+  // ---- Definition B: parallel portfolio-base weighted-average cost ledger ----
+  // All fields below are OPTIONAL and additive: a Holding that never sets
+  // base_currency is completely unaffected by applyTransactionToHolding's
+  // Definition B logic — every field and code path above this point behaves
+  // exactly as it did before this feature existed. A caller opts in by
+  // setting base_currency to the owning portfolio's base currency.
+  base_currency?: string;        // portfolio's base currency (e.g. 'GBP'), set by the caller to opt in
+  base_total_cost?: number;      // weighted-average cost of currently held shares, in base_currency
+  base_avg_cost?: number;        // base_total_cost / total_shares (undefined while unreliable or no shares)
+  base_cost_reliable?: boolean;  // false once any contributing transaction could not be trusted as an
+                                  // authoritative base-currency cost — see applyTransactionToHolding.
+                                  // total_cost/base_total_cost are NEVER fabricated once this is false;
+                                  // callers must not display base_total_cost/base_avg_cost as verified
+                                  // figures while it is false.
+  base_realised_value?: number;  // Definition B realised P/L: base-currency proceeds - base-currency
+                                  // historical cost of the units sold (never derived from a single
+                                  // sale-date FX rate applied to the native ledger)
+  base_realised_cost?: number;
+  base_realised_proceeds?: number;
 };
 
 export type Ccy = 'GBP' | 'USD' | 'EUR';
@@ -208,12 +228,27 @@ export function applyTransactionToHolding(holding: Holding, txn: Txn) {
     if (!factor || factor <= 0) return;
     holding.total_shares = round(holding.total_shares * factor);
     holding.avg_price = holding.total_shares > 0 ? holding.total_cost / holding.total_shares : 0;
+
+    // Definition B (additive, opt-in): a split creates no value in any
+    // currency — base_total_cost is unchanged, only the derived per-share
+    // figure moves, exactly mirroring the native avg_price line above.
+    if (holding.base_currency) {
+      holding.base_total_cost = holding.base_total_cost ?? 0;
+      holding.base_cost_reliable = holding.base_cost_reliable ?? true;
+      holding.base_avg_cost = holding.total_shares > 0 && holding.base_cost_reliable
+        ? holding.base_total_cost / holding.total_shares
+        : undefined;
+    }
     return;
   }
 
   const qty   = Math.abs(Number(txn.quantity) || 0);
   const price = Number(txn.price) || 0;
   const fee   = Number(txn.fee)   || 0;
+  // Definition B: pre-transaction share count, captured before any native
+  // mutation below. Shares are currency-agnostic, so this same value is the
+  // correct proportion basis for both the native and base-currency ledgers.
+  const sharesBefore = holding.total_shares;
 
   const assetCcy = (holding.currency || '').toUpperCase();
   const isCash   = isCashTicker(holding.ticker);
@@ -310,6 +345,77 @@ export function applyTransactionToHolding(holding: Holding, txn: Txn) {
     holding.total_cost = round(holding.total_cost);
     holding.total_shares = round(holding.total_shares);
     holding.avg_price = holding.total_cost / holding.total_shares;
+  }
+
+  // -----------------------------------------------------------------------
+  // Definition B: parallel portfolio-base weighted-average cost ledger.
+  // Fully additive — nothing above this point was changed to add this.
+  // Only runs when the caller has opted in via holding.base_currency; a
+  // Holding that never sets it is completely unaffected.
+  //
+  // Cost is sourced ONLY from cash_value/cash_ccy (the portfolio-base cash
+  // actually paid/received — see src/lib/cashLeg.ts), never retranslated
+  // from the native ledger using a sale-date or any other FX rate. Where
+  // asset currency == base currency, cash_value already equals settle_value
+  // (see the DB's mirror_settle_to_cash trigger and cashLeg.ts's
+  // same-currency branch), so no separate no-FX code path is needed here —
+  // the same formula naturally requires zero FX.
+  //
+  // TIN/TOT: no linked-transfer persistence layer exists yet (see the
+  // transfer pending/matching design), so a TIN/TOT's cash_value cannot yet
+  // be trusted as a real carried-forward base cost. Rather than guess, the
+  // holding's base ledger is marked unreliable from that point on. Once a
+  // confirmed link exists, this is exactly what CostParcel.baseCost/baseCcy
+  // (src/lib/transferCostBasis.ts) is for.
+  // -----------------------------------------------------------------------
+  if (holding.base_currency) {
+    const baseCcy = holding.base_currency.toUpperCase();
+    holding.base_total_cost = holding.base_total_cost ?? 0;
+    holding.base_realised_value = holding.base_realised_value ?? 0;
+    holding.base_realised_cost = holding.base_realised_cost ?? 0;
+    holding.base_realised_proceeds = holding.base_realised_proceeds ?? 0;
+    holding.base_cost_reliable = holding.base_cost_reliable ?? true;
+
+    if (type === 'TIN' || type === 'TOT') {
+      holding.base_cost_reliable = false;
+    } else if (type === 'BUY' || type === 'SELL') {
+      const cashCcy = (txn.cash_ccy || '').toUpperCase();
+      const cashVal = txn.cash_value != null ? Math.abs(Number(txn.cash_value)) : null;
+      const fx = txn.cash_fx_to_portfolio != null ? Number(txn.cash_fx_to_portfolio) : null;
+      const crossCcy = assetCcy !== baseCcy;
+      const reliableRow = cashVal != null && cashCcy === baseCcy && (!crossCcy || (fx != null && fx > 0));
+
+      if (!reliableRow) {
+        holding.base_cost_reliable = false;
+      } else if (type === 'BUY') {
+        holding.base_total_cost += cashVal!;
+      } else {
+        // SELL — proportional removal using the SAME pre-transaction share
+        // count as the native ledger (shares are currency-agnostic).
+        const proportion = sharesBefore > 0 ? qty / sharesBefore : 0;
+        const costOut = proportion > 0 ? holding.base_total_cost * proportion : 0;
+        if (holding.base_cost_reliable) {
+          holding.base_realised_value += cashVal! - costOut;
+          holding.base_realised_proceeds += cashVal!;
+          holding.base_realised_cost += costOut;
+        }
+        holding.base_total_cost -= costOut;
+      }
+    }
+
+    if (holding.total_shares === 0) {
+      // Position fully closed: nothing ambiguous remains to distrust, and
+      // any later re-opening (fresh BUYs) starts a clean base-cost ledger —
+      // exactly mirroring the native ledger's own full-exit reset above.
+      holding.base_total_cost = 0;
+      holding.base_cost_reliable = true;
+    } else if (holding.base_cost_reliable) {
+      holding.base_total_cost = round(holding.base_total_cost);
+    }
+
+    holding.base_avg_cost = holding.total_shares > 0 && holding.base_cost_reliable
+      ? holding.base_total_cost / holding.total_shares
+      : undefined;
   }
 }
 

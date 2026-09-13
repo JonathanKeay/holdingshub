@@ -80,11 +80,27 @@ function normalise(holding: Holding) {
  * branch (src/lib/queries.ts) — and return the parcel of quantity + native
  * cost that left the holding. Never books realised P/L: a transfer is not a
  * disposal.
+ *
+ * If the holding also carries a reliable Definition B base-currency ledger
+ * (holding.base_currency set, holding.base_cost_reliable true — see
+ * applyTransactionToHolding), the same proportion is applied to
+ * base_total_cost and returned as parcel.baseCost/baseCcy. If the source's
+ * base ledger is not reliable (or not tracked at all), baseCost/baseCcy are
+ * simply omitted — never fabricated — so the eventual destination correctly
+ * inherits "unknown" rather than a invented figure.
  */
 export function applyTransferOut(holding: Holding, quantity: number): CostParcel {
   const qty = Math.abs(Number(quantity) || 0);
   const proportion = holding.total_shares > 0 ? qty / holding.total_shares : 0;
   const nativeCost = proportion > 0 ? round(holding.total_cost * proportion) : 0;
+
+  let baseCost: number | undefined;
+  let baseCcy: string | undefined;
+  if (holding.base_currency && holding.base_cost_reliable && holding.base_total_cost != null) {
+    baseCost = proportion > 0 ? round(holding.base_total_cost * proportion) : 0;
+    baseCcy = holding.base_currency.toUpperCase();
+    holding.base_total_cost -= baseCost;
+  }
 
   holding.total_shares -= qty;
   holding.total_cost -= nativeCost;
@@ -96,6 +112,7 @@ export function applyTransferOut(holding: Holding, quantity: number): CostParcel
     quantity: round(qty),
     nativeCost,
     nativeCcy: (holding.currency || '').toUpperCase(),
+    ...(baseCost != null ? { baseCost, baseCcy } : {}),
   };
 }
 
@@ -106,6 +123,13 @@ export function applyTransferOut(holding: Holding, quantity: number): CostParcel
  * it — an asset-currency mismatch between source and destination means the
  * two legs do not actually describe the same security/parcel, which is a
  * matching error, not something this function should paper over.
+ *
+ * If `holding` opts into Definition B (base_currency set) and the parcel
+ * carries a baseCost, it is credited the same way as the native cost. If the
+ * parcel has no baseCost (the source's base ledger was itself unreliable, or
+ * untracked), the destination's base ledger is marked unreliable rather than
+ * left silently at whatever it was — "unknown" must propagate, never be
+ * dropped.
  */
 export function applyTransferIn(holding: Holding, parcel: CostParcel): void {
   const destCcy = (holding.currency || '').toUpperCase();
@@ -119,4 +143,24 @@ export function applyTransferIn(holding: Holding, parcel: CostParcel): void {
   holding.total_shares += parcel.quantity;
   holding.total_cost += parcel.nativeCost;
   normalise(holding);
+
+  if (holding.base_currency) {
+    const baseCcy = holding.base_currency.toUpperCase();
+    holding.base_total_cost = holding.base_total_cost ?? 0;
+    holding.base_cost_reliable = holding.base_cost_reliable ?? true;
+
+    if (parcel.baseCost != null && parcel.baseCcy) {
+      const parcelBaseCcy = parcel.baseCcy.toUpperCase();
+      if (parcelBaseCcy !== baseCcy) {
+        throw new Error(
+          `applyTransferIn: base-currency mismatch — destination is ${baseCcy}, parcel is ${parcelBaseCcy}.`
+        );
+      }
+      if (holding.base_cost_reliable) {
+        holding.base_total_cost += parcel.baseCost;
+      }
+    } else {
+      holding.base_cost_reliable = false;
+    }
+  }
 }
