@@ -7,6 +7,7 @@ import { createClient } from '@supabase/supabase-js';
 import { resolveCashLeg, deriveAssetToBaseRate } from '@/lib/cashLeg';
 import { findUnresolvedTickerRows } from '@/lib/unresolvedTickers';
 import { splitTickersForLookup } from '@/lib/newTickerLookupCap';
+import { processImportedTransfers } from '@/lib/transferImportIntegration';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -481,6 +482,21 @@ export async function POST(req: NextRequest) {
     const finalRows: any[] = [];
     const skippedCashLeg: { row: number; ticker: string; date: string; portfolio: string; reason: string }[] = [];
 
+    // A single multi-row INSERT gives every row the SAME created_at (verified
+    // directly against this project's local dev Postgres: `now()` is the
+    // transaction's start time, identical for every row in one statement).
+    // The holdings/transfer-replay ordering (queries.ts's compareTxForHoldings,
+    // and transferImportIntegration.ts's compareForReplay) uses created_at as
+    // its second tiebreaker, after date — so without a distinct value per row,
+    // several same-date rows in ONE import batch fall through to a
+    // type-priority/UUID tiebreak that does not reflect the CSV's own row
+    // order, and can place a row intended to come AFTER a same-day TOT before
+    // it, corrupting that TOT's frozen cost-parcel capture. Assigning each
+    // row its own strictly-increasing created_at (1ms apart, in the same
+    // order the CSV rows were read) preserves that intended order without
+    // changing any replay/engine code.
+    const importBaseTimeMs = Date.now();
+
     for (const row of cleaned) {
       const base = normalizeTicker(row.raw.ticker);
       if (base === 'GBP' || !(assetsMap[base] || assetsMap[`${base}.L`])) continue;
@@ -524,6 +540,7 @@ export async function POST(req: NextRequest) {
           asset_id: assetsMap[tickerKey]?.id,
           type,
           date: raw.date_time,
+          created_at: new Date(importBaseTimeMs + finalRows.length).toISOString(),
           quantity,
           price,
           fee,
@@ -594,6 +611,7 @@ export async function POST(req: NextRequest) {
         asset_id: assetMeta.id,
         type,
         date: raw.date_time,
+        created_at: new Date(importBaseTimeMs + finalRows.length).toISOString(),
         quantity,
         price,
         fee,
@@ -616,9 +634,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Insert transactions
+    // Insert transactions. .select() is required here (beyond the pre-existing
+    // insert) so we get back the generated ids for any TOT/TIN rows — needed
+    // to create their pending transfer records below. This does not change
+    // the atomicity of this statement: it is still one INSERT of the whole
+    // batch, all-or-nothing, exactly as before.
+    let insertedRows: any[] = [];
     try {
-      const { error: insertError } = await supabase.from('transactions').insert(finalRows);
+      const { data: insertData, error: insertError } = await supabase
+        .from('transactions')
+        .insert(finalRows)
+        .select('id, portfolio_id, asset_id, type, quantity, date, notes');
       if (insertError) {
         console.error('Import INSERT error:', insertError, { finalRowsCount: finalRows.length, sampleRows: finalRows.slice(0, 3) });
         return NextResponse.json(
@@ -630,6 +656,7 @@ export async function POST(req: NextRequest) {
           { status: 500 }
         );
       }
+      insertedRows = insertData ?? [];
     } catch (err: any) {
       console.error('Import exception:', err, { finalRowsCount: finalRows.length, sampleRows: finalRows.slice(0, 3) });
       return NextResponse.json(
@@ -642,12 +669,45 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Transfer persistence integration (Phase 2): for any security TOT/TIN
+    // rows in this import, create their pending_out/pending_in transfer
+    // record and surface any candidate matches. This is a SEPARATE write
+    // from the transactions insert above, which has already succeeded and
+    // committed — a failure here is reported, never used to roll back or
+    // otherwise touch the transaction rows, which remain exactly as
+    // imported. A TOT/TIN with no transfer record simply behaves exactly as
+    // it always has (today's unchanged legacy behaviour) — untracked, not
+    // broken. Live holdings replay and Definition B are not touched by this
+    // call; it only ever reads transaction history (to replay a source
+    // holding for parcel capture) and writes to the `transfers` table.
+    let transferResult: Awaited<ReturnType<typeof processImportedTransfers>> = { created: [], suggestions: {}, errors: [] };
+    const assetTickerById: Record<string, string> = {};
+    for (const a of (updatedAssets ?? [])) {
+      if (a?.id) assetTickerById[a.id] = (a.ticker ?? '').toString();
+    }
+    try {
+      transferResult = await processImportedTransfers(supabase, insertedRows, assetTickerById);
+    } catch (err: any) {
+      console.error('Transfer persistence integration error (transactions already committed):', err);
+      transferResult = { created: [], suggestions: {}, errors: [{ transactionId: 'unknown', error: String(err) }] };
+    }
+
     const skippedNote = skippedCashLeg.length > 0
       ? ` ${skippedCashLeg.length} row${skippedCashLeg.length > 1 ? 's' : ''} skipped — no reliable currency conversion (see skippedCashLeg).`
       : '';
+    const suggestionCount = Object.values(transferResult.suggestions).reduce((n, s) => n + s.length, 0);
+    const transferNote = transferResult.created.length > 0
+      ? ` ${transferResult.created.length} pending transfer record${transferResult.created.length > 1 ? 's' : ''} recorded` +
+        (suggestionCount > 0 ? ` (${suggestionCount} candidate match${suggestionCount > 1 ? 'es' : ''} found — not linked automatically).` : '.')
+      : '';
+    const transferErrorNote = transferResult.errors.length > 0
+      ? ` ${transferResult.errors.length} transfer record${transferResult.errors.length > 1 ? 's' : ''} could not be created — affected rows remain imported but untracked as transfers (see transferResult.errors).`
+      : '';
+
     return NextResponse.json(safe({
-      message: `Imported ${finalRows.length} transaction${finalRows.length > 1 ? 's' : ''}.${skippedNote}`,
+      message: `Imported ${finalRows.length} transaction${finalRows.length > 1 ? 's' : ''}.${skippedNote}${transferNote}${transferErrorNote}`,
       skippedCashLeg,
+      transferResult,
     }));
   } catch (err: any) {
     console.error('Import API unhandled error:', err);
