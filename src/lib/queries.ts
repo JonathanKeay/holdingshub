@@ -7,6 +7,13 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Portfolio } from '@/types/supabase';
+import { applyTransferIn } from './transferCostBasis';
+import {
+  indexResolvedTransfersByTinTransactionId,
+  resolveTransferParcelForTin,
+  type ResolvedTransferForReplay,
+  type ResolvedTransferLookup,
+} from './holdingsTransferIntegration';
 
 // ----------------------------- Types -----------------------------
 
@@ -419,6 +426,41 @@ export function applyTransactionToHolding(holding: Holding, txn: Txn) {
   }
 }
 
+// -----------------------------------------------------------------------
+// Resolved-transfer-aware dispatch (additive; applyTransactionToHolding
+// above is completely unmodified). For a TIN with a resolved (matched or
+// external_in) transfer record, applies the frozen CostParcel via
+// applyTransferIn instead of applyTransactionToHolding's legacy transfer-
+// date/notional derivation. Every other transaction — including every TOT,
+// every pending_in/unlinked TIN, and everything else — falls straight
+// through to the unchanged applyTransactionToHolding. See
+// src/lib/holdingsTransferIntegration.ts for the pure lookup/parcel-
+// resolution helpers this uses; no database access happens here or there —
+// resolvedTinTransfers is built ONCE per replay by the caller.
+// -----------------------------------------------------------------------
+export function applyTransactionToHoldingResolvingTransfers(
+  holding: Holding,
+  txn: Txn,
+  resolvedTinTransfers: ResolvedTransferLookup
+) {
+  const parcel = resolveTransferParcelForTin(txn, resolvedTinTransfers, holding);
+  if (parcel) {
+    try {
+      applyTransferIn(holding, parcel);
+      return;
+    } catch (err) {
+      // A live, user-facing holdings computation must never break because
+      // of one bad transfer record — fall back to legacy behaviour for
+      // this row rather than throwing.
+      console.error(
+        `applyTransactionToHoldingResolvingTransfers: resolved transfer for TIN ${txn.id} failed to apply ` +
+          `(${String((err as any)?.message ?? err)}); falling back to legacy TIN behaviour for this row.`
+      );
+    }
+  }
+  applyTransactionToHolding(holding, txn);
+}
+
 // --------------------- Cash (multi-ccy ledgers) ---------------------
 
 type CashMap = Record<Ccy, number>;
@@ -695,6 +737,18 @@ export async function getPortfoliosWithHoldingsAndCash(
 
   const txns = stableSortTx<Txn>(txnsRaw as Txn[]);
 
+  // Resolved transfers (matched/external_in only) — ONE query for the whole
+  // replay, never per portfolio or per transaction. Indexed once by
+  // in_transaction_id below; pending_out/pending_in rows are never fetched
+  // at all, since they have no effect on holdings in this phase.
+  const { data: transfersRaw } = await supabase
+    .from('transfers')
+    .select('id, status, in_transaction_id, quantity, native_cost, native_ccy, base_cost, base_ccy')
+    .in('status', ['matched', 'external_in']);
+  const resolvedTinTransfers = indexResolvedTransfersByTinTransactionId(
+    (transfersRaw ?? []) as ResolvedTransferForReplay[]
+  );
+
   const assetMeta: Record<string, AssetMeta & { company_name?: string }> = {};
   for (const a of assets) {
     assetMeta[a.id] = {
@@ -761,7 +815,7 @@ export async function getPortfoliosWithHoldingsAndCash(
         };
       }
 
-      applyTransactionToHolding(holdingsMap[ticker], txn);
+      applyTransactionToHoldingResolvingTransfers(holdingsMap[ticker], txn, resolvedTinTransfers);
     }
 
     // Cash balances (multi-ccy)
@@ -805,6 +859,16 @@ export async function getAllHoldingsAndCashSummary(
 
   const txnsAll = stableSortTx<Txn>(txnsRaw as Txn[]);
   const txns = filterAsOf(txnsAll, opts?.asOf);
+
+  // Resolved transfers (matched/external_in only) — ONE query for the whole
+  // replay. See getPortfoliosWithHoldingsAndCash's identical comment.
+  const { data: transfersRaw } = await supabase
+    .from('transfers')
+    .select('id, status, in_transaction_id, quantity, native_cost, native_ccy, base_cost, base_ccy')
+    .in('status', ['matched', 'external_in']);
+  const resolvedTinTransfers = indexResolvedTransfersByTinTransactionId(
+    (transfersRaw ?? []) as ResolvedTransferForReplay[]
+  );
 
   const assetMeta: Record<string, AssetMeta & { company_name?: string }> = {};
   for (const a of assets) {
@@ -853,7 +917,7 @@ export async function getAllHoldingsAndCashSummary(
         realised_proceeds: 0,
       };
     }
-    applyTransactionToHolding(holdingsMap[ticker], txn);
+    applyTransactionToHoldingResolvingTransfers(holdingsMap[ticker], txn, resolvedTinTransfers);
   }
 
   const holdings = Object.values(holdingsMap);
