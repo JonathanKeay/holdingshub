@@ -5,10 +5,12 @@
 // gets a pending_out/pending_in transfer record created for it here.
 //
 // NOT changed by this file: live holdings replay (src/lib/queries.ts is
-// untouched), Definition B wiring (still dormant), any existing transaction
-// row (nothing here ever updates/deletes a transactions row — only reads
-// them, to replay history for parcel capture, and only ever INSERTs new
-// transfers rows).
+// untouched by this file specifically — it does independently consult
+// resolved transfers this file creates, see queries.ts's
+// applyTransactionToHoldingResolvingTransfers), any existing transaction row
+// (nothing here ever updates/deletes a transactions row — only reads them,
+// to replay history for parcel capture, and only ever INSERTs new transfers
+// rows).
 //
 // Cash transfers (CASH.* tickers) are out of scope here: they have no
 // Holding/cost-basis concept at all (see getPortfoliosWithHoldingsAndCash,
@@ -148,9 +150,20 @@ export type ProcessImportedTransfersResult = {
 /**
  * Orchestrates the DB side: for each newly-inserted security TOT/TIN row,
  * creates its pending_out/pending_in transfer record, then looks for
- * opposite-leg pending candidates (any portfolio) and ranks them via
- * suggestTransferMatches — surfaced in the result for the caller (the
- * import route) to include in its response. Never confirms/links anything.
+ * opposite-leg pending candidates and ranks them via suggestTransferMatches
+ * — surfaced in the result for the caller (the import route) to include in
+ * its response. Never confirms/links anything.
+ *
+ * `importingUserId` (the session user id, NOT the RLS-derived caller —
+ * `supabase` here is a service-role client that bypasses RLS entirely) is
+ * the ownership boundary for candidate matching: a pending transfer whose
+ * owning portfolio does not belong to `importingUserId` is filtered out
+ * before ranking, so it can never become a match target and never appears
+ * in `suggestions` — one user's transaction must never be matched,
+ * suggested, or otherwise disclosed as a candidate for another user's
+ * transfer. See toCandidateInput below and the transfer financial-
+ * correctness investigation (Question D) for why this check exists at the
+ * application layer rather than relying on the database.
  *
  * If a transaction was successfully imported but its transfer record fails
  * to insert, the transaction row is NOT rolled back (it already committed,
@@ -161,7 +174,8 @@ export type ProcessImportedTransfersResult = {
 export async function processImportedTransfers(
   supabase: SupabaseClient,
   insertedRows: InsertedTxnForTransfer[],
-  assetTickerById: Record<string, string>
+  assetTickerById: Record<string, string>,
+  importingUserId: string
 ): Promise<ProcessImportedTransfersResult> {
   const result: ProcessImportedTransfersResult = { created: [], suggestions: {}, errors: [] };
 
@@ -233,8 +247,10 @@ export async function processImportedTransfers(
   }
 
   // Candidate suggestions: fetch all currently-pending opposite-leg rows
-  // (across every portfolio) and rank each new row against them. Read-only;
-  // nothing is confirmed.
+  // (across every portfolio — this client is service-role, so the query
+  // itself is unfiltered by owner) and rank each new row against them.
+  // Read-only; nothing is confirmed. Ownership is enforced below, in
+  // toCandidateInput, before anything from this fetch is used.
   const { data: pending } = await supabase
     .from('transfers')
     .select('id, status, out_transaction_id, in_transaction_id, asset_id, quantity')
@@ -253,10 +269,31 @@ export async function processImportedTransfers(
       .in('id', txnIds.length > 0 ? txnIds : ['00000000-0000-0000-0000-000000000000']);
     const metaById = new Map((txnMeta ?? []).map((t: any) => [t.id, t]));
 
+    // Ownership boundary for the portfolios referenced above. Fetched once,
+    // scoped to exactly the portfolio ids in play — never a query "for
+    // importingUserId's portfolios" that could accidentally widen scope.
+    const portfolioIds = Array.from(
+      new Set((txnMeta ?? []).map((t: any) => t.portfolio_id).filter(Boolean))
+    );
+    const { data: portfolioRows } = await supabase
+      .from('portfolios')
+      .select('id, user_id')
+      .in('id', portfolioIds.length > 0 ? portfolioIds : ['00000000-0000-0000-0000-000000000000']);
+    const ownerUserIdByPortfolioId = new Map((portfolioRows ?? []).map((p: any) => [p.id, p.user_id]));
+
+    /**
+     * Returns null (excluding the row entirely — never merely down-ranked)
+     * whenever the transaction's owning portfolio does not belong to
+     * importingUserId. This is the ONLY ownership check in this function —
+     * `supabase` bypasses RLS — so a transfer belonging to another user must
+     * never survive past this point, whether as a match target or as a
+     * suggested candidate.
+     */
     const toCandidateInput = (p: any): MatchCandidateInput | null => {
       const txnId = p.out_transaction_id ?? p.in_transaction_id;
       const meta = metaById.get(txnId);
       if (!meta) return null;
+      if (ownerUserIdByPortfolioId.get(meta.portfolio_id) !== importingUserId) return null;
       return {
         transferId: p.id,
         transactionId: txnId,

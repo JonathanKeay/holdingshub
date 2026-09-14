@@ -7,10 +7,25 @@
 // src/lib/transferCostBasis.ts. Thin DB-facing wrappers live separately in
 // src/lib/transferPersistence.ts.
 //
-// NOT YET WIRED IN: nothing in the import route, UI, or live holdings replay
-// calls any of this. Definition B stays dormant; current TIN/TOT production
-// behaviour (src/lib/queries.ts's applyTransactionToHolding) is completely
-// unchanged and does not consult this module.
+// WIRED IN, partially:
+//  - captureTransferOut/capturePendingIn are called from the import route
+//    (src/lib/transferImportIntegration.ts, service-role) when a security
+//    TOT/TIN row is imported.
+//  - matchTransfer/confirmExternalOut/confirmExternalIn (this file's
+//    app-layer mirrors of the DB-layer confirm_transfer_match()) have thin
+//    Supabase wrappers in src/lib/transferPersistence.ts, but nothing in
+//    src/app/ calls those wrappers yet — there is still no authenticated
+//    UI/route for a user to confirm a match themselves. Today's real
+//    `matched` transfers in DEV were created directly, not through this
+//    path.
+// Once a transfer reaches matched/external_in/external_out, it IS consulted
+// by live holdings replay: src/lib/queries.ts's
+// applyTransactionToHoldingResolvingTransfers (used by
+// getPortfoliosWithHoldingsAndCash/getAllHoldingsAndCashSummary) applies its
+// frozen cost parcel via applyTransferIn instead of the legacy
+// applyTransactionToHolding TIN/TOT branch. applyTransactionToHolding itself
+// remains completely unmodified and is still the fallback for any
+// unresolved TIN/TOT.
 //
 // Transaction immutability: no function here accepts a transaction row to
 // mutate, and none returns one. The only mutation these functions perform is

@@ -32,11 +32,16 @@
 // only ever coupled through the parcel value, never through shared object
 // state or timing.
 //
-// NOT YET WIRED IN. No import path, UI, or the existing
-// applyTransactionToHolding()'s TIN/TOT branches call these functions today,
-// and this file changes no existing behaviour. Deciding *which* real TOT/TIN
-// rows are linked is a persistence/matching question (see the transfer
-// pending/matching design) that is deliberately out of scope here — this
+// WIRED IN: applyTransferIn/applyTransferOut are called from
+// queries.ts's applyTransactionToHoldingResolvingTransfers, which
+// getPortfoliosWithHoldingsAndCash and getAllHoldingsAndCashSummary use for
+// live dashboard/mobile holdings replay whenever a resolved (matched/
+// external_in/external_out) transfer record exists for a TIN/TOT. The
+// unmodified applyTransactionToHolding()'s own TIN/TOT branches still never
+// call these — that function remains the deliberate legacy fallback for a
+// TIN/TOT with no resolved transfer. Deciding *which* real TOT/TIN rows are
+// linked is a persistence/matching question (see src/lib/transfers.ts,
+// src/lib/transferMatching.ts) that is deliberately out of scope here — this
 // module only answers "given a source holding and a CONFIRMED link, what is
 // the correct arithmetic", never "which rows are linked" or "is this link
 // safe to assume".

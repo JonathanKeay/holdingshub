@@ -705,7 +705,7 @@ export async function POST(req: NextRequest) {
       if (a?.id) assetTickerById[a.id] = (a.ticker ?? '').toString();
     }
     try {
-      transferResult = await processImportedTransfers(supabase, insertedRows, assetTickerById);
+      transferResult = await processImportedTransfers(supabase, insertedRows, assetTickerById, session.user.id);
     } catch (err: any) {
       console.error('Transfer persistence integration error (transactions already committed):', err);
       transferResult = { created: [], suggestions: {}, errors: [{ transactionId: 'unknown', error: String(err) }] };

@@ -1,9 +1,14 @@
 // src/lib/transferPersistence.ts
 //
 // Thin Supabase-facing wrappers around the pure builders/validators in
-// src/lib/transfers.ts. NOT called by any import route, UI, or live
-// holdings replay yet — these exist as the persistence primitives this
-// phase was scoped to deliver, ready to be wired in a later, separate step.
+// src/lib/transfers.ts. NOT called by any authenticated route or UI yet —
+// there is still no user-facing way to confirm a transfer match — these
+// exist as the persistence primitives that step is scoped to build on. Live
+// holdings replay (src/lib/queries.ts) does not call these wrappers either,
+// but it DOES consult their end result: once a transfer reaches matched/
+// external_in/external_out (by whatever means — today, only directly), the
+// dashboard/mobile replay resolves and applies it. See src/lib/transfers.ts
+// for the current wiring status of each function this file wraps.
 //
 // Every write here touches only the `transfers` table. None of these
 // functions ever update or delete a `transactions` row.

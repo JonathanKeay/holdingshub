@@ -871,10 +871,24 @@ export async function getPortfoliosWithHoldingsAndCash(
   // matched/external_out resolve a TOT leg (matched rows carry both).
   // pending_out/pending_in rows are never fetched at all, since they have
   // no effect on holdings in this phase.
-  const { data: transfersRaw } = await supabase
+  //
+  // A failed read here is NEVER treated as "no transfers exist" — those are
+  // different facts with very different financial consequences (see the
+  // transfer financial-correctness investigation: a swallowed permission
+  // error previously made every TIN/TOT silently fall back to legacy,
+  // pre-transfer-resolution cost behaviour with no indication anything had
+  // gone wrong). Throwing surfaces the failure to the caller instead of
+  // quietly producing numbers that look plausible but are wrong.
+  const { data: transfersRaw, error: transfersError } = await supabase
     .from('transfers')
     .select('id, status, out_transaction_id, in_transaction_id, quantity, native_cost, native_ccy, base_cost, base_ccy')
     .in('status', ['matched', 'external_in', 'external_out']);
+  if (transfersError) {
+    throw new Error(
+      `getPortfoliosWithHoldingsAndCash: failed to read transfers — refusing to silently fall back to ` +
+        `legacy TIN/TOT cost behaviour (${transfersError.message})`
+    );
+  }
   const resolvedTinTransfers = indexResolvedTransfersByTinTransactionId(
     (transfersRaw ?? []) as ResolvedTransferForReplay[]
   );
@@ -1015,11 +1029,18 @@ export async function getAllHoldingsAndCashSummary(
   const txns = filterAsOf(txnsAll, opts?.asOf);
 
   // Resolved transfers — ONE query for the whole replay. See
-  // getPortfoliosWithHoldingsAndCash's identical comment.
-  const { data: transfersRaw } = await supabase
+  // getPortfoliosWithHoldingsAndCash's identical comment and rationale for
+  // why a failed read here throws rather than degrading to an empty set.
+  const { data: transfersRaw, error: transfersError } = await supabase
     .from('transfers')
     .select('id, status, out_transaction_id, in_transaction_id, quantity, native_cost, native_ccy, base_cost, base_ccy')
     .in('status', ['matched', 'external_in', 'external_out']);
+  if (transfersError) {
+    throw new Error(
+      `getAllHoldingsAndCashSummary: failed to read transfers — refusing to silently fall back to ` +
+        `legacy TIN/TOT cost behaviour (${transfersError.message})`
+    );
+  }
   const resolvedTinTransfers = indexResolvedTransfersByTinTransactionId(
     (transfersRaw ?? []) as ResolvedTransferForReplay[]
   );
