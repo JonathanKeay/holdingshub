@@ -15,6 +15,7 @@ import MarketStatusDots from '@/components/MarketStatusDots';
 import MarketStatusBadges from '@/components/MarketStatusBadges';
 import PortfolioExpandCollapseControls from '@/components/PortfolioExpandCollapseControls';
 import RefreshIndicator from '@/components/RefreshIndicator';
+import Image from 'next/image';
 
 // Cache FX for 60s; cache prices for 30s (keyed by sorted tickers)
 // Add tags so we can optionally invalidate via a webhook/job later.
@@ -151,7 +152,9 @@ export default async function Dashboard() {
 
   return (
     <main className="p-6 max-w-6xl mx-auto">
-  <h1 className="text-2xl font-bold mb-2">HoldingsHub(Dev)</h1>
+  <h1 className="text-2xl font-bold mb-2 flex items-center gap-2">
+    <Image src="/holdingshub-wordmark.svg" alt="HoldingsHub" width={182} height={40} className="h-7 w-auto" priority />
+  </h1>
       <div className="mb-2 space-y-1">
         <MarketStatusDots tickers={allTickersSorted} />
         <MarketStatusBadges tickers={allTickersSorted} />

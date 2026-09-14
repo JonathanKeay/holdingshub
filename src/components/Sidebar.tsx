@@ -74,7 +74,7 @@ export function Sidebar() {
 					{/* App mark */}
 					<div className="flex items-center justify-center mb-2">
 						<Link href="/" aria-label="HoldingsHub">
-							<Image src="/holdingshub-mark.svg" alt="HoldingsHub" width={24} height={24} />
+							<Image src="/holdingshub-icon.svg" alt="HoldingsHub" width={40} height={40} />
 						</Link>
 					</div>
 				{topNavItems.map((item) => (
