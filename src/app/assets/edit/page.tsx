@@ -16,6 +16,7 @@ type AssetRow = {
   status: string | null;
   delisted_at: string | null;
   price_multiplier: number | null;
+  domain: string | null;
 };
 
 type AliasRow = {
@@ -31,6 +32,12 @@ export default function EditAssetPage() {
   const [status, setStatus] = useState('');
   const [delistedAt, setDelistedAt] = useState('');
   const [priceMultiplier, setPriceMultiplier] = useState('');
+  // Corporate domain — used by the existing Logo.dev proxy (see
+  // /api/logo-proxy) to fetch the company logo. Deliberately editing this
+  // instead of the raw logo_url column: the server normalises whatever's
+  // typed here (a bare domain or a full URL) and keeps assets.logo_url in
+  // sync automatically. See /api/assets/edit's PATCH handler.
+  const [domain, setDomain] = useState('');
   const [message, setMessage] = useState('');
   // Import aliases for the asset currently loaded (e.g. eToro's "CAKE.US"
   // resolving to canonical "CAKE") — see /api/asset-aliases and
@@ -50,6 +57,7 @@ export default function EditAssetPage() {
         setStatus('');
         setDelistedAt('');
         setPriceMultiplier('');
+        setDomain('');
         setAliases([]);
         setNewAlias('');
         setAliasMessage('');
@@ -99,6 +107,7 @@ export default function EditAssetPage() {
       setStatus(data.status ?? '');
       setDelistedAt(data.delisted_at ?? '');
       setPriceMultiplier(String(data.price_multiplier ?? ''));
+      setDomain(data.domain ?? '');
       await loadAliases(data.id);
     }
   };
@@ -167,6 +176,7 @@ export default function EditAssetPage() {
       status: status || 'active',
       delisted_at: delistedAt || null,
       price_multiplier: priceMultiplierNum,
+      domain: domain.trim() || null,
     };
 
     try {
@@ -178,7 +188,7 @@ export default function EditAssetPage() {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         console.error('Asset update error:', body);
-        setMessage('Update failed');
+        setMessage(typeof body?.error === 'string' ? body.error : 'Update failed');
         return;
       }
       setMessage('Asset updated successfully');
@@ -259,6 +269,19 @@ export default function EditAssetPage() {
               </button>
             </div>
             {aliasMessage && <p className="mt-1 text-sm text-tred">{aliasMessage}</p>}
+          </div>
+          <div>
+            <label className="block font-medium">Corporate Domain</label>
+            <input
+              type="text"
+              placeholder="e.g. shopify.com"
+              value={domain}
+              onChange={(e) => setDomain(e.target.value)}
+              className="border p-2 w-full"
+            />
+            <p className="mt-1 text-sm text-foreground/60">
+              Used to fetch the company logo. You can paste a full address (e.g. https://www.shopify.com/) — it will be normalised automatically. Leave blank to clear it.
+            </p>
           </div>
           <div>
             <label className="block font-medium">Price Multiplier</label>

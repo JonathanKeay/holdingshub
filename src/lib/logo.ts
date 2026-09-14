@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { DomainLookup } from './newAssetDomainEnrichment';
 
 function isManualLogoUrl(value?: string | null) {
   if (!value) return false;
@@ -110,3 +111,31 @@ export async function updateLogoUrlForTickersUsingFinnhub(tickers: string[], cli
     }
   }
 }
+
+/**
+ * Fetch a single ticker's corporate website URL from Finnhub's company-
+ * profile endpoint — raw and unnormalised (callers should run the result
+ * through normalizeDomain, see src/lib/domain.ts). Returns null on any
+ * failure, including a missing FINNHUB_API_KEY: this is a best-effort data
+ * source for new-asset domain enrichment (see
+ * src/lib/newAssetDomainEnrichment.ts), never a requirement. Never throws.
+ *
+ * Shares the same Finnhub endpoint as fetchAndCacheLogos/
+ * updateLogoUrlForTickersUsingFinnhub above, but is kept separate rather
+ * than reusing those: they write directly to assets.logo_url for a batch of
+ * tickers, whereas this is a single-ticker, side-effect-free lookup meant
+ * to be composed with enrichNewAssetDomain's own domain+logo_url write (so
+ * both columns are set together, not just logo_url).
+ */
+export const fetchCompanyWeburlFromFinnhub: DomainLookup = async (ticker: string) => {
+  const token = process.env.FINNHUB_API_KEY;
+  if (!token) return null;
+  try {
+    const r = await fetch(`https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(ticker)}&token=${token}`);
+    if (!r.ok) return null;
+    const j = await r.json();
+    return typeof j?.weburl === 'string' ? j.weburl : null;
+  } catch {
+    return null;
+  }
+};

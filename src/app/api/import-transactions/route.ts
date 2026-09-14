@@ -16,6 +16,23 @@ import { resolveImportTicker, type ImportAssetAlias } from '@/lib/assetResolutio
 import { processImportedTransfers } from '@/lib/transferImportIntegration';
 import { getSupabaseServerClient } from '@/lib/supabase-server';
 import { resolveConfirmTickerMeta } from '@/lib/confirmTickerMetaResolution';
+import { enrichNewAssetDomain } from '@/lib/newAssetDomainEnrichment';
+import { fetchCompanyWeburlFromFinnhub } from '@/lib/logo';
+
+// Best-effort corporate-domain discovery for a brand-new asset (see the
+// insert loop below and src/lib/newAssetDomainEnrichment.ts). Applied
+// per-ticker in parallel (via Promise.all) rather than summed, so this is
+// the most Confirm & Import is ever slowed by domain discovery, regardless
+// of how many new tickers are in one import — never fails it either way.
+//
+// 1200ms, not PER_LOOKUP_TIMEOUT_MS's 3000ms: measured real Finnhub
+// stock/profile2 round trips (2026-09-14, from this LXC) at ~100-230ms
+// whether a company profile was found or not — a genuinely unresponsive
+// provider is the only realistic way this cap is ever hit, and a financial
+// import confirming should not visibly pause for 3s over an optional,
+// non-financial enrichment step. 1200ms keeps ~5-10x headroom over observed
+// real-world latency while bounding the rare worst case much tighter.
+const DOMAIN_DISCOVERY_TIMEOUT_MS = 1200;
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -462,15 +479,35 @@ export async function POST(req: NextRequest) {
     await Promise.all(
       tickerMetas.map(async (meta) => {
         if (meta.ticker === 'GBP') return null;
-        const { error } = await supabase
+        const { data: insertedAsset, error } = await supabase
           .from('assets')
           .insert({
             ticker: meta.ticker,
             name: meta.name,
             currency: meta.currency,
             price_multiplier: meta.price_multiplier,
+          })
+          .select('id')
+          .single();
+        if (error) {
+          console.error('Asset insert error:', meta.ticker, error);
+          return null;
+        }
+
+        // Best-effort corporate-domain enrichment (see
+        // src/lib/newAssetDomainEnrichment.ts) — removes the previously-
+        // manual "go into Supabase and set the domain" step for a
+        // genuinely new asset. Capped at DOMAIN_DISCOVERY_TIMEOUT_MS and
+        // wrapped so a failure here can NEVER fail this insert or the
+        // overall import: the asset above is already committed.
+        if (insertedAsset?.id) {
+          await withTimeout(
+            enrichNewAssetDomain(supabase, insertedAsset.id, meta.ticker, fetchCompanyWeburlFromFinnhub),
+            DOMAIN_DISCOVERY_TIMEOUT_MS
+          ).catch((err) => {
+            console.warn(`Domain enrichment skipped for ${meta.ticker}:`, err instanceof Error ? err.message : err);
           });
-        if (error) console.error('Asset insert error:', meta.ticker, error);
+        }
         return null;
       })
     );
