@@ -1,6 +1,16 @@
 import { NextResponse } from 'next/server';
+import { getSupabaseServerClient } from '@/lib/supabase-server';
 
 export async function GET(request: Request) {
+  // Proxies the server's Finnhub API key/quota for an arbitrary symbol —
+  // require a session so this can't be used as an open, unauthenticated
+  // proxy against your API quota.
+  const supabase = await getSupabaseServerClient();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
   const url = new URL(request.url);
   const symbol = url.searchParams.get('symbol') || url.searchParams.get('ticker') || '';
   if (!symbol) return NextResponse.json({ error: 'symbol required' }, { status: 400 });

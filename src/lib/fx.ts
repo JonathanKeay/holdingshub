@@ -1,7 +1,21 @@
 // src/lib/fx.ts
-import { supabase } from './supabase';
+import { createClient } from '@supabase/supabase-js';
+
+// This function only ever runs in trusted server code (wrapped in
+// unstable_cache and called from React Server Components — never exposed to
+// the browser). `fx_rates` is shared reference data: SELECT is open to
+// anon/authenticated, but INSERT/UPDATE/DELETE are service-role only (see
+// 20260914100300_rls_shared_reference_data.sql), so the caching upsert
+// below needs a service-role client, not the plain anon-key one.
+function getServiceClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error('fetchExchangeRatesToGBP: missing Supabase service-role env vars');
+  return createClient(url, key);
+}
 
 export async function fetchExchangeRatesToGBP(): Promise<Record<string, number>> {
+  const supabase = getServiceClient();
   const today = new Date().toISOString().slice(0, 10);
 
   // 1. Try cache first

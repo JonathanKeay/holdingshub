@@ -2,7 +2,9 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+// Cookie-aware client — required now that `settings` is per-user and its
+// RLS policies key off the logged-in session (auth.uid()).
+import { supabaseBrowser as supabase } from '@/lib/supabase/browser';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { THEME_BLUE_TEXT, THEME_BLUE_DISABLED_BG } from '@/lib/uiColors';
@@ -23,14 +25,26 @@ export default function SettingsPage() {
   const [visibleStatuses, setVisibleStatuses] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [theme, setTheme] = useState<'system' | 'light' | 'dark'>('system');
+  const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        setLoading(false);
+        return;
+      }
+      setUserId(user.id);
+
+      // RLS already restricts this to the caller's own row; maybeSingle()
+      // (not single()) because a brand-new user has no settings row yet —
+      // that's an expected, non-error state, not a fetch failure.
       const { data } = await supabase
         .from('settings')
         .select('*')
-        .eq('id', 'global')
-        .single();
+        .maybeSingle();
       if (data) {
         setShowZero(!!data.show_zero_holdings);
         setVisibleStatuses(data.visible_statuses ?? ['active']);
@@ -41,6 +55,15 @@ export default function SettingsPage() {
     };
     load();
   }, []);
+
+  // Upsert (not update) — a brand-new user has no settings row yet, so the
+  // first change must create one. user_id is the table's primary key, so
+  // this targets exactly the caller's own row (and RLS's WITH CHECK still
+  // enforces user_id = auth.uid() regardless).
+  const upsertSettings = async (patch: Record<string, unknown>) => {
+    if (!userId) return;
+    await supabase.from('settings').upsert({ user_id: userId, ...patch }, { onConflict: 'user_id' });
+  };
 
   const updateTheme = async (value: 'system' | 'light' | 'dark') => {
     setTheme(value);
@@ -64,7 +87,7 @@ export default function SettingsPage() {
 
   const updateShowZero = async (value: boolean) => {
     setShowZero(value);
-    await supabase.from('settings').update({ show_zero_holdings: value }).eq('id', 'global');
+    await upsertSettings({ show_zero_holdings: value });
   };
 
   const toggleStatus = async (status: string) => {
@@ -73,7 +96,7 @@ export default function SettingsPage() {
       : [...visibleStatuses, status];
 
     setVisibleStatuses(updated);
-    await supabase.from('settings').update({ visible_statuses: updated }).eq('id', 'global');
+    await upsertSettings({ visible_statuses: updated });
   };
 
   return (

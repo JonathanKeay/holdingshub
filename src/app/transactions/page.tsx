@@ -2,7 +2,11 @@
 
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
+// Cookie-aware client (carries the logged-in session), required now that
+// `transactions`/`portfolios` are RLS-protected by portfolio ownership — the
+// old bare anon-key client here had no session at all and only worked
+// because of the previously wide-open grants.
+import { supabaseBrowser as supabase } from '@/lib/supabase/browser';
 import { formatCurrency } from '@/lib/formatCurrency';
 import { IconEdit, IconTrash } from '@/components/icons';
 import { resolveCashLeg, deriveAssetToBaseRate } from '@/lib/cashLeg';

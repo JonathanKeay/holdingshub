@@ -45,11 +45,12 @@ export default async function RootLayout({
       } = await supabase.auth.getSession();
       if (!session) return null;
 
+      // RLS scopes this to the caller's own row; maybeSingle() (not
+      // single()) because a brand-new user legitimately has no row yet.
       const { data } = await supabase
         .from('settings')
         .select('portfolio_prefs')
-        .eq('id', 'global')
-        .single();
+        .maybeSingle();
 
       const t = (data as any)?.portfolio_prefs?.theme;
       if (t === 'system' || t === 'light' || t === 'dark') return t as 'system' | 'light' | 'dark';

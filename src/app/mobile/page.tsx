@@ -34,11 +34,12 @@ export default async function MobilePage() {
   }
 
   // Load settings for the same filters as the desktop page
+  // RLS scopes this to the caller's own row; maybeSingle() (not single())
+  // because a brand-new user legitimately has no settings row yet.
   const settingsPromise = supabase
     .from('settings')
     .select('show_zero_holdings, visible_statuses, portfolio_prefs')
-    .eq('id', 'global')
-    .single();
+    .maybeSingle();
   const totalSummaryPromise = getAllHoldingsAndCashSummary(supabase);
   const [settingsRes, summary] = await Promise.all([settingsPromise, totalSummaryPromise]);
 

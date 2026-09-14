@@ -1,0 +1,39 @@
+-- Secure default privileges (Phase 5).
+--
+-- This project's `public` schema currently auto-grants full
+-- SELECT/INSERT/UPDATE/DELETE on any NEWLY CREATED table to `anon` and
+-- `authenticated`, for tables created by either the `postgres` or the
+-- `supabase_admin` role (both own default-privilege entries in this
+-- database — confirmed by inspecting pg_default_acl). That default is
+-- exactly how every table before `transfers` ended up wide open, and the
+-- `transfers` migration only avoided it by manually revoking afterwards.
+--
+-- This revokes that default for both roles, so any future `create table`
+-- starts with NO access for anon/authenticated and must explicitly grant
+-- what it needs — matching the discipline already used by hand in the
+-- `transfers` and reference-data migrations above.
+--
+-- This does not change any privilege already granted on an EXISTING table —
+-- only the default applied to tables created from this point forward.
+--
+-- NOTE on the `supabase_admin` half of this fix: `ALTER DEFAULT PRIVILEGES
+-- FOR ROLE X` can only be run by role X itself (or a superuser acting as
+-- X). The role this migration runner connects as (`postgres`) is not a
+-- superuser in this project and is not a member of `supabase_admin`, so a
+-- migration applied as `postgres` structurally cannot change
+-- `supabase_admin`'s default privileges — confirmed directly against this
+-- DEV database (attempting it here fails with "permission denied to
+-- change default privileges"). That other half of this fix is therefore
+-- NOT in this file (a migration cannot do what its connecting role is not
+-- permitted to do) — it is a separate, deliberately non-migration, manual
+-- artifact:
+--
+--   supabase/manual-admin/20260914_secure_default_privileges_supabase_admin.sql
+--
+-- which documents exactly how to run it (locally and, once verified, for
+-- PROD) and how to check it took effect. See that file before assuming
+-- default privileges are fully secured — this migration alone only closes
+-- the `postgres`-owned half.
+
+alter default privileges for role postgres in schema public
+  revoke all on tables from anon, authenticated;

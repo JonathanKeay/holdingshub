@@ -1,0 +1,78 @@
+-- Manual, admin-only companion to
+-- supabase/migrations/20260914100400_secure_default_privileges.sql
+--
+-- WHY THIS FILE IS NOT A MIGRATION
+-- ---------------------------------------------------------------------
+-- `ALTER DEFAULT PRIVILEGES FOR ROLE X` can only be executed by role X
+-- itself, or by a superuser acting as X. Every migration in
+-- supabase/migrations/ is applied by the Supabase CLI connected as the
+-- `postgres` role. In this project, `postgres` is NOT a superuser and is
+-- NOT a member of `supabase_admin` (confirmed directly against local DEV:
+-- attempting the statement below as `postgres` fails with "permission
+-- denied to change default privileges"). `supabase_admin` IS a superuser
+-- in this project, but the reverse relationship does not hold.
+--
+-- Because of this, the statement below can never succeed as part of a
+-- normal `supabase migration up` / `supabase db push` run — no amount of
+-- migration-file cleverness changes which role the CLI connects as. Rather
+-- than pretend a migration can do this, it is kept here as its own
+-- deliberately separate, explicitly manual artifact.
+--
+-- WHAT IT DOES
+-- ---------------------------------------------------------------------
+-- Schema `public` currently auto-grants full SELECT/INSERT/UPDATE/DELETE
+-- on any NEWLY CREATED table to `anon` and `authenticated`, for tables
+-- created by the `supabase_admin` role specifically (this project also has
+-- an equivalent default owned by `postgres`, which IS fixed by the tracked
+-- migration 20260914100400 — this file only covers the other half). This
+-- statement closes that half for `supabase_admin`-created tables.
+--
+-- It is idempotent: re-running it when already applied is a harmless no-op
+-- (revoking a privilege that is not currently granted does nothing and
+-- does not error).
+--
+-- HOW TO RUN — LOCAL DEV
+-- ---------------------------------------------------------------------
+--   docker exec -i -e PGPASSWORD=postgres <local-supabase-db-container> \
+--     psql -U supabase_admin -d postgres -f - <<'EOF'
+--   (paste the ALTER DEFAULT PRIVILEGES statement below)
+--   EOF
+--
+-- or, equivalently:
+--   docker exec -i -e PGPASSWORD=postgres <local-supabase-db-container> \
+--     psql -U supabase_admin -d postgres \
+--     -f supabase/manual-admin/20260914_secure_default_privileges_supabase_admin.sql
+--
+-- This has already been applied to this project's local DEV database
+-- (verified: pg_default_acl no longer lists anon/authenticated in the
+-- supabase_admin-owned default ACL for schema public, table type 'r').
+-- Re-running it is safe and will simply confirm the no-op.
+--
+-- HOW TO RUN — HOSTED (EVENTUAL PROD)
+-- ---------------------------------------------------------------------
+-- NOT verified against hosted Supabase infrastructure — do this only as
+-- part of the separately-approved PROD migration sequence, never as a
+-- side effect of a routine `supabase db push`. On hosted Supabase it is
+-- not yet confirmed whether the `postgres` role has sufficient privilege
+-- to run this (hosted role setup may differ from local). Likely options,
+-- in order of preference, to be confirmed at PROD-migration time:
+--   1. Run via the Supabase Dashboard's SQL Editor, which may connect
+--      with elevated privileges — verify this before relying on it.
+--   2. Open a Supabase support request to run it with an appropriately
+--      privileged connection.
+-- Do not assume `supabase db push` alone will apply this statement on
+-- hosted infrastructure.
+--
+-- VERIFY (read-only; safe to run anywhere, any role)
+-- ---------------------------------------------------------------------
+--   select defaclrole::regrole, defaclobjtype, defaclacl
+--   from pg_default_acl
+--   where defaclnamespace::regnamespace::text = 'public'
+--     and defaclrole::regrole::text = 'supabase_admin';
+--
+-- After this statement has taken effect, the table-type ('r') row for
+-- supabase_admin should list only postgres/service_role — no anon or
+-- authenticated entries.
+
+alter default privileges for role supabase_admin in schema public
+  revoke all on tables from anon, authenticated;

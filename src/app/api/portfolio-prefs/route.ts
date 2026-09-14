@@ -11,11 +11,17 @@ function coerceTheme(v: unknown): ThemePref | null {
 
 export async function GET() {
   const supabase = await getSupabaseServerClient();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
+  // RLS already restricts this to the caller's own row; maybeSingle() (not
+  // single()) because a brand-new user legitimately has no row yet.
   const { data, error } = await supabase
     .from('settings')
     .select('portfolio_prefs')
-    .eq('id', 'global')
-    .single();
+    .maybeSingle();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -29,13 +35,17 @@ export async function GET() {
 
 export async function PUT(req: Request) {
   const supabase = await getSupabaseServerClient();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
   const body = (await req.json()) as Partial<Prefs>;
 
   const { data, error: readError } = await supabase
     .from('settings')
     .select('portfolio_prefs')
-    .eq('id', 'global')
-    .single();
+    .maybeSingle();
 
   if (readError) return NextResponse.json({ error: readError.message }, { status: 500 });
 
@@ -46,10 +56,14 @@ export async function PUT(req: Request) {
     theme: coerceTheme((body as any).theme) ?? coerceTheme((existing as any).theme) ?? 'system',
   };
 
+  // Upsert (not update) — a brand-new user has no settings row yet, so the
+  // first preference change must create one, scoped to their own user_id.
   const { error } = await supabase
     .from('settings')
-    .update({ portfolio_prefs: { ...(existing as any), ...next } })
-    .eq('id', 'global');
+    .upsert(
+      { user_id: session.user.id, portfolio_prefs: { ...(existing as any), ...next } },
+      { onConflict: 'user_id' }
+    );
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });

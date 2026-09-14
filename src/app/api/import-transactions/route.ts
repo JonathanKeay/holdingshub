@@ -8,6 +8,7 @@ import { resolveCashLeg, deriveAssetToBaseRate } from '@/lib/cashLeg';
 import { findUnresolvedTickerRows } from '@/lib/unresolvedTickers';
 import { splitTickersForLookup } from '@/lib/newTickerLookupCap';
 import { processImportedTransfers } from '@/lib/transferImportIntegration';
+import { getSupabaseServerClient } from '@/lib/supabase-server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -157,6 +158,18 @@ function canon12(name: string) {
 // ---------- Route handler ----------
 export async function POST(req: NextRequest) {
   try {
+    // This route writes with the service-role key, which bypasses RLS
+    // entirely — so it must both require a session AND explicitly scope
+    // every portfolio lookup below to that session's own user_id itself
+    // (not rely on RLS to do it, since RLS has no effect on this client).
+    const sessionClient = await getSupabaseServerClient();
+    const {
+      data: { session },
+    } = await sessionClient.auth.getSession();
+    if (!session) {
+      return NextResponse.json(safe({ message: 'unauthorized' }), { status: 401 });
+    }
+
     // Build Supabase server client with env guards
     const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
     const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -203,9 +216,15 @@ export async function POST(req: NextRequest) {
       return v.toString().trim().replace(/[\u00A0\s,£$€¥]/g, '') || '';
     }
 
-    // Fetch portfolios (uses base_currency) and assets (include status if you want to block inactive)
+    // Fetch portfolios (uses base_currency) and assets (include status if you want to block inactive).
+    // Portfolios are explicitly scoped to the caller's own user_id — this
+    // client is service-role and bypasses RLS, so without this filter a
+    // CSV's portfolio-name matching below would search every user's
+    // portfolios, letting one user's import land in another user's
+    // portfolio by name-guessing. `assets` is shared reference data and is
+    // deliberately NOT scoped by user.
     const [{ data: portfolios }, { data: assets }] = await Promise.all([
-      supabase.from('portfolios').select('id, name, base_currency'),
+      supabase.from('portfolios').select('id, name, base_currency').eq('user_id', session.user.id),
       // include resolved_ticker so we can match CSVs against both ticker and resolved_ticker
       supabase.from('assets').select('id, ticker, currency, status, resolved_ticker'),
     ]);

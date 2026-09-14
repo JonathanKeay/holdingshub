@@ -1,9 +1,19 @@
 import { NextResponse } from 'next/server';
 import { fetchAndCacheLogosFromDomain, fetchAndCacheLogos, updateLogoUrlForTickersUsingFinnhub } from '@/lib/logo';
 import { createClient } from '@supabase/supabase-js';
+import { getSupabaseServerClient } from '@/lib/supabase-server';
 
 export async function GET(req: Request) {
   try {
+    // This mutates shared asset/reference data via service-role — require a
+    // logged-in session (any authenticated user; assets are shared, non-
+    // financial metadata, so no further per-user restriction is applied).
+    const supabase = await getSupabaseServerClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session) return NextResponse.json({ success: false, error: 'unauthorized' }, { status: 401 });
+
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const svc = process.env.SUPABASE_SERVICE_ROLE_KEY!;
     if (!url || !svc) {

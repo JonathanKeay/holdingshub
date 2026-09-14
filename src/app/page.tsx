@@ -42,11 +42,12 @@ export default async function Dashboard() {
   }
 
   // Kick off everything in parallel
+  // RLS scopes this to the caller's own row; maybeSingle() (not single())
+  // because a brand-new user legitimately has no settings row yet.
   const settingsPromise = supabase
     .from('settings')
     .select('show_zero_holdings, visible_statuses, portfolio_prefs')
-    .eq('id', 'global')
-    .single();
+    .maybeSingle();
 
   const portfoliosPromise = getPortfoliosWithHoldingsAndCash(supabase);
   const totalSummaryPromise = getAllHoldingsAndCashSummary(supabase);

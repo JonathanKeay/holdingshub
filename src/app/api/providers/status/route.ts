@@ -1,7 +1,14 @@
 import { NextResponse } from 'next/server';
 import { getFinnhubStats } from '@/lib/prices';
+import { getSupabaseServerClient } from '@/lib/supabase-server';
 
 export async function GET() {
+  const supabase = await getSupabaseServerClient();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
   const fh = getFinnhubStats();
   const now = Date.now();
   const lastErrMs = fh.lastErrorAt ? Date.parse(fh.lastErrorAt) : 0;

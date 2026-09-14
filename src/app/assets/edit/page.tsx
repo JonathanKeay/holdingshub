@@ -1,11 +1,12 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// Cookie-aware client for the read-only search below (assets SELECT is open
+// to any authenticated user). The actual write goes through
+// /api/assets/edit instead of a direct table write — `assets` is shared
+// reference data and ordinary authenticated users no longer have direct
+// INSERT/UPDATE/DELETE grants on it; see that route for why.
+import { supabaseBrowser as supabase } from '@/lib/supabase/browser';
 
 type AssetRow = {
   id: string;
@@ -84,26 +85,30 @@ export default function EditAssetPage() {
     }
 
     const updatePayload = {
+      id: asset.id,
       name: name.trim() || null,
       resolved_ticker: resolvedTicker.trim() || null,
       status: status || 'active',
       delisted_at: delistedAt || null,
       price_multiplier: priceMultiplierNum,
-      last_failed_resolved_ticker: null,
-      resolution_attempted_at: null,
     };
 
-    const { error } = await supabase
-      .from('assets')
-      .update(updatePayload)
-      .eq('id', asset.id)
-      .select();
-
-    if (error) {
-      console.error('❌ Supabase update error:', error);
-      setMessage('Update failed');
-    } else {
+    try {
+      const res = await fetch('/api/assets/edit', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(updatePayload),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        console.error('Asset update error:', body);
+        setMessage('Update failed');
+        return;
+      }
       setMessage('Asset updated successfully');
+    } catch (err) {
+      console.error('Asset update error:', err);
+      setMessage('Update failed');
     }
   };
 

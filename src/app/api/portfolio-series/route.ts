@@ -328,10 +328,10 @@ export async function GET(request: Request) {
 
   mark('auth');
 
+  // RLS scopes this to the caller's own row.
   const settingsRes = await supabase
     .from('settings')
     .select('show_zero_holdings, visible_statuses')
-    .eq('id', 'global')
     .maybeSingle<{ show_zero_holdings: boolean | null; visible_statuses: string[] | null }>();
   const showZeroHoldings = !!settingsRes.data?.show_zero_holdings;
   const visibleStatusesSet = new Set((settingsRes.data?.visible_statuses ?? ['active']).map(s => String(s).toLowerCase().trim()));

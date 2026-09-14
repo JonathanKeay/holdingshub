@@ -23,10 +23,10 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   // Determine which tickers we care about (current visible holdings)
+  // RLS scopes this to the caller's own row.
   const settingsRes = await supabase
     .from('settings')
     .select('show_zero_holdings, visible_statuses')
-    .eq('id', 'global')
     .maybeSingle<{ show_zero_holdings: boolean | null; visible_statuses: string[] | null }>();
   const showZeroHoldings = !!settingsRes.data?.show_zero_holdings;
   const keepHolding = keepHoldingFactory(showZeroHoldings, settingsRes.data?.visible_statuses ?? ['active']);
