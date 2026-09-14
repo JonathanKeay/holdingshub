@@ -13,6 +13,9 @@ import {
   THEME_BLUE_CHECKED,
   THEME_BLUE_DISABLED_BG,
 } from '../../lib/uiColors';
+import { ISO_CURRENCY_CODES } from '../../lib/manualAssetMetadata';
+
+const CURRENCY_OPTIONS = Array.from(ISO_CURRENCY_CODES).sort();
 
 export default function ImportPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -20,6 +23,9 @@ export default function ImportPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmedTickers, setConfirmedTickers] = useState<Record<string, boolean>>({});
+  // Manual metadata entered by the user for tickers whose automatic lookup
+  // didn't return a currency (see preview.newTickers[].needsManualCurrency).
+  const [manualMeta, setManualMeta] = useState<Record<string, { currency: string; name: string }>>({});
   const [unresolvedTickerRows, setUnresolvedTickerRows] = useState<UnresolvedTickerRow[] | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -27,7 +33,16 @@ export default function ImportPage() {
     message: string;
     validCount: number;
     invalidCount: number;
-    newTickers: { ticker: string; name?: string }[];
+    newTickers: {
+      ticker: string;
+      name?: string | null;
+      currency?: string | null;
+      price_multiplier?: number;
+      // Automatic lookup didn't return a currency — this ticker is
+      // genuinely new and needs manual currency entry before it can be
+      // confirmed for import.
+      needsManualCurrency?: boolean;
+    }[];
     // Ticker symbols beyond the lookup cap — not checked against Yahoo,
     // shown so a 21st+ new ticker is never a silent surprise.
     omittedNewTickers?: string[];
@@ -47,6 +62,7 @@ export default function ImportPage() {
     setIsSubmitting(true);
     setStatus('Previewing...');
     setUnresolvedTickerRows(null);
+    setManualMeta({});
     try {
       const form = new FormData();
       form.append('file', file);
@@ -82,6 +98,25 @@ export default function ImportPage() {
 
   async function handleConfirm() {
     if (!file || isSubmitting) return;
+
+    const confirmed = Object.keys(confirmedTickers).filter((t) => confirmedTickers[t]);
+
+    // Client-side safety net (the server is the authority): a genuinely new
+    // ticker whose automatic lookup found no currency must have a manually
+    // selected currency before we even try to submit it.
+    const manualTickerMetadata: Record<string, { currency: string; name?: string }> = {};
+    for (const ticker of confirmed) {
+      const info = preview?.newTickers.find((nt) => nt.ticker === ticker);
+      if (!info?.needsManualCurrency) continue;
+      const entry = manualMeta[ticker];
+      const currency = (entry?.currency || '').trim().toUpperCase();
+      if (!currency) {
+        setStatus(`Select a currency for ${ticker} before importing — automatic lookup could not find one.`);
+        return;
+      }
+      manualTickerMetadata[ticker] = { currency, name: entry?.name?.trim() || undefined };
+    }
+
     setIsSubmitting(true);
     setStatus('Importing...');
     setUnresolvedTickerRows(null);
@@ -89,7 +124,10 @@ export default function ImportPage() {
       const form = new FormData();
       form.append('file', file);
       // include confirmed tickers as JSON as your UI already does
-      form.append('confirmedTickers', JSON.stringify(Object.keys(confirmedTickers).filter(t => confirmedTickers[t])));
+      form.append('confirmedTickers', JSON.stringify(confirmed));
+      if (Object.keys(manualTickerMetadata).length > 0) {
+        form.append('manualTickerMetadata', JSON.stringify(manualTickerMetadata));
+      }
 
       const resp = await fetch('/api/import-transactions?stage=confirm', { method: 'POST', body: form });
       const body = await resp.json().catch(() => ({ message: 'Invalid JSON response', rawStatus: resp.status }));
@@ -98,7 +136,10 @@ export default function ImportPage() {
         const errMsg = body?.message ?? 'Import failed';
         const detail = body?.error ? ` — ${body.error}` : '';
         const debug = body?.debug ? `\nDebug: ${JSON.stringify(body.debug)}` : '';
-        setStatus(`${errMsg}${detail}${debug}`);
+        const missingDetail = Array.isArray(body?.missingCurrencyDetails) && body.missingCurrencyDetails.length > 0
+          ? `\n${body.missingCurrencyDetails.map((d: { ticker: string; reason: string }) => `${d.ticker}: ${d.reason}`).join('\n')}`
+          : '';
+        setStatus(`${errMsg}${detail}${debug}${missingDetail}`);
         // All-or-nothing ticker-resolution abort: the file and preview/checkbox
         // state are deliberately left untouched so the user can tick more
         // boxes and retry the exact same CSV without re-selecting it.
@@ -114,6 +155,7 @@ export default function ImportPage() {
       setPreview(null);
       setFile(null);
       setConfirmedTickers({});
+      setManualMeta({});
       // ensure native input is cleared so selecting a new (or same) file fires onChange
       if (inputRef?.current) inputRef.current.value = '';
     } catch (err: any) {
@@ -255,20 +297,65 @@ export default function ImportPage() {
           {preview.newTickers.length > 0 && (
             <div className="mt-4">
               <h3 className="font-semibold mb-1">New Tickers: (please tick to confirm addition)</h3>
-              <ul className="list-none pl-2">
-                {preview.newTickers.map(({ ticker, name }) => (
-                  <li key={ticker} className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      checked={confirmedTickers[ticker] || false}
-                      onChange={(e) =>
-                        setConfirmedTickers((prev) => ({
-                          ...prev,
-                          [ticker]: e.target.checked,
-                        }))
-                      }
-                    />
-                    <label>{ticker} {name && <span className="text-sm text-foreground/60">({name})</span>}</label>
+              <ul className="list-none pl-2 space-y-2">
+                {preview.newTickers.map(({ ticker, name, needsManualCurrency }) => (
+                  <li key={ticker}>
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        checked={confirmedTickers[ticker] || false}
+                        onChange={(e) =>
+                          setConfirmedTickers((prev) => ({
+                            ...prev,
+                            [ticker]: e.target.checked,
+                          }))
+                        }
+                      />
+                      <label>{ticker} {name && <span className="text-sm text-foreground/60">({name})</span>}</label>
+                    </div>
+
+                    {needsManualCurrency && (
+                      <div className="mt-1 ml-6 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm">
+                        <div className="mb-2 text-foreground/80">
+                          {ticker} is genuinely new, but automatic lookup couldn&apos;t determine its currency.
+                          Confirm the ticker and select its currency below before importing.
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <label className="text-xs text-foreground/60">
+                            Currency
+                            <select
+                              className="ml-1 border rounded px-1 py-0.5 bg-background"
+                              value={manualMeta[ticker]?.currency || ''}
+                              onChange={(e) =>
+                                setManualMeta((prev) => ({
+                                  ...prev,
+                                  [ticker]: { ...prev[ticker], currency: e.target.value, name: prev[ticker]?.name || '' },
+                                }))
+                              }
+                            >
+                              <option value="">-- select --</option>
+                              {CURRENCY_OPTIONS.map((code) => (
+                                <option key={code} value={code}>{code}</option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="text-xs text-foreground/60">
+                            Name (optional)
+                            <input
+                              type="text"
+                              className="ml-1 border rounded px-1 py-0.5 bg-background"
+                              value={manualMeta[ticker]?.name || ''}
+                              onChange={(e) =>
+                                setManualMeta((prev) => ({
+                                  ...prev,
+                                  [ticker]: { currency: prev[ticker]?.currency || '', name: e.target.value },
+                                }))
+                              }
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>

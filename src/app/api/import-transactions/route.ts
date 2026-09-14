@@ -7,6 +7,12 @@ import { createClient } from '@supabase/supabase-js';
 import { resolveCashLeg, deriveAssetToBaseRate } from '@/lib/cashLeg';
 import { findUnresolvedTickerRows } from '@/lib/unresolvedTickers';
 import { splitTickersForLookup } from '@/lib/newTickerLookupCap';
+import {
+  resolveNewAssetMeta,
+  filterTickersNeedingCreation,
+  type ManualTickerMetadata,
+  type ResolvedNewAssetMeta,
+} from '@/lib/manualAssetMetadata';
 import { processImportedTransfers } from '@/lib/transferImportIntegration';
 import { getSupabaseServerClient } from '@/lib/supabase-server';
 
@@ -369,9 +375,18 @@ export async function POST(req: NextRequest) {
         tickersToLookup.map(async (t) => {
           try {
             const meta = await withTimeout(fetchTickerMeta(t), PER_LOOKUP_TIMEOUT_MS);
-            return { ticker: meta.ticker, name: meta.name, currency: meta.currency, price_multiplier: meta.price_multiplier };
+            return {
+              ticker: meta.ticker,
+              name: meta.name,
+              currency: meta.currency,
+              price_multiplier: meta.price_multiplier,
+              // Automatic lookup didn't return a currency — this ticker is
+              // genuinely new and needs manual currency entry before it can
+              // be confirmed. See src/lib/manualAssetMetadata.ts.
+              needsManualCurrency: !meta.currency,
+            };
           } catch {
-            return { ticker: t, name: null, currency: null, price_multiplier: 1 };
+            return { ticker: t, name: null, currency: null, price_multiplier: 1, needsManualCurrency: true };
           }
         })
       );
@@ -398,16 +413,60 @@ export async function POST(req: NextRequest) {
         ? JSON.parse(confirmedTickersRaw || '[]')
         : [];
 
-    const normalizedConfirmed = (confirmedTickers ?? [])
-      .map(normalizeTicker)
-      .filter((t) => t && t !== 'GBP');
-
-    // Ensure we have metadata for new assets and currency is present
-    const tickerMetas = await Promise.all(normalizedConfirmed.map((t) => fetchTickerMeta(t)));
-    const missingCurrency = tickerMetas.filter((m) => !m.currency).map((m) => m.ticker);
-    if (missingCurrency.length > 0) {
-      return NextResponse.json(safe({ message: 'Missing currency for new tickers', missingCurrency }), { status: 400 });
+    // Manual metadata fallback (currency, optionally name), keyed by the
+    // same normalized ticker string the client confirmed — only ever
+    // consulted below for a ticker whose fresh automatic lookup doesn't
+    // return a currency. See src/lib/manualAssetMetadata.ts.
+    const manualMetadataRaw = formData.get('manualTickerMetadata');
+    let manualTickerMetadata: Record<string, ManualTickerMetadata> = {};
+    if (typeof manualMetadataRaw === 'string' && manualMetadataRaw.trim()) {
+      try {
+        const parsed = JSON.parse(manualMetadataRaw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          manualTickerMetadata = parsed;
+        }
+      } catch {
+        return NextResponse.json(safe({ message: 'Invalid manualTickerMetadata JSON' }), { status: 400 });
+      }
     }
+
+    // De-duplicated, and excludes any ticker that already exists as an
+    // asset by the time this confirm request runs (e.g. created by another
+    // import, or another confirm of this same import, between preview and
+    // now) — this is what stops a duplicate asset row being created for the
+    // same ticker.
+    const normalizedConfirmed = filterTickersNeedingCreation(
+      (confirmedTickers ?? []).map(normalizeTicker).filter((t) => t && t !== 'GBP'),
+      assets ?? []
+    );
+
+    // Ensure we have metadata for new assets and currency is present.
+    // Automatic lookup is always attempted first (preserves the existing
+    // convenient flow) — manual metadata is only used when it doesn't
+    // return a currency.
+    const resolvedMetas: ResolvedNewAssetMeta[] = await Promise.all(
+      normalizedConfirmed.map(async (t) => {
+        const auto = await fetchTickerMeta(t);
+        return resolveNewAssetMeta(auto, manualTickerMetadata[t]);
+      })
+    );
+
+    const missing = resolvedMetas.filter(
+      (m): m is Extract<ResolvedNewAssetMeta, { status: 'missing' }> => m.status === 'missing'
+    );
+    if (missing.length > 0) {
+      return NextResponse.json(
+        safe({
+          message: 'Missing currency for new tickers',
+          missingCurrency: missing.map((m) => m.ticker),
+          missingCurrencyDetails: missing.map((m) => ({ ticker: m.ticker, reason: m.reason })),
+        }),
+        { status: 400 }
+      );
+    }
+    const tickerMetas = resolvedMetas.filter(
+      (m): m is Extract<ResolvedNewAssetMeta, { status: 'ok' }> => m.status === 'ok'
+    );
 
     // Insert brand new assets
     await Promise.all(
