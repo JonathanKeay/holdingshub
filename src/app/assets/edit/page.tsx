@@ -18,6 +18,11 @@ type AssetRow = {
   price_multiplier: number | null;
 };
 
+type AliasRow = {
+  id: string;
+  alias: string;
+};
+
 export default function EditAssetPage() {
   const [ticker, setTicker] = useState('');
   const [asset, setAsset] = useState<AssetRow | null>(null);
@@ -27,6 +32,12 @@ export default function EditAssetPage() {
   const [delistedAt, setDelistedAt] = useState('');
   const [priceMultiplier, setPriceMultiplier] = useState('');
   const [message, setMessage] = useState('');
+  // Import aliases for the asset currently loaded (e.g. eToro's "CAKE.US"
+  // resolving to canonical "CAKE") — see /api/asset-aliases and
+  // src/lib/assetResolution.ts.
+  const [aliases, setAliases] = useState<AliasRow[]>([]);
+  const [newAlias, setNewAlias] = useState('');
+  const [aliasMessage, setAliasMessage] = useState('');
 
   useEffect(() => {
     if (message === 'Asset updated successfully') {
@@ -39,13 +50,30 @@ export default function EditAssetPage() {
         setStatus('');
         setDelistedAt('');
         setPriceMultiplier('');
+        setAliases([]);
+        setNewAlias('');
+        setAliasMessage('');
       }, 2000);
       return () => clearTimeout(timer);
     }
   }, [message]);
 
+  const loadAliases = async (assetId: string) => {
+    const { data, error } = await supabase
+      .from('asset_aliases')
+      .select('id, alias')
+      .eq('asset_id', assetId)
+      .order('alias');
+    if (error) {
+      console.error('Supabase alias load error:', error);
+      return;
+    }
+    setAliases((data ?? []) as AliasRow[]);
+  };
+
   const handleSearch = async () => {
     setMessage('Searching...');
+    setAliasMessage('');
     const symbol = ticker.trim().toUpperCase();
 
     const { data, error } = await supabase
@@ -58,9 +86,11 @@ export default function EditAssetPage() {
       console.error('Supabase search error:', { symbol, error });
       setMessage('Error searching for asset');
       setAsset(null);
+      setAliases([]);
     } else if (!data) {
       setMessage('Asset not found');
       setAsset(null);
+      setAliases([]);
     } else {
       setMessage('');
       setAsset(data as AssetRow);
@@ -69,6 +99,52 @@ export default function EditAssetPage() {
       setStatus(data.status ?? '');
       setDelistedAt(data.delisted_at ?? '');
       setPriceMultiplier(String(data.price_multiplier ?? ''));
+      await loadAliases(data.id);
+    }
+  };
+
+  const handleAddAlias = async () => {
+    if (!asset?.id || !newAlias.trim()) return;
+    setAliasMessage('Adding...');
+    try {
+      const res = await fetch('/api/asset-aliases', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ asset_id: asset.id, alias: newAlias }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAliasMessage(body?.error ?? 'Failed to add alias');
+        return;
+      }
+      setNewAlias('');
+      setAliasMessage('');
+      await loadAliases(asset.id);
+    } catch (err) {
+      console.error('Add alias error:', err);
+      setAliasMessage('Failed to add alias');
+    }
+  };
+
+  const handleRemoveAlias = async (id: string) => {
+    if (!asset?.id) return;
+    setAliasMessage('Removing...');
+    try {
+      const res = await fetch('/api/asset-aliases', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setAliasMessage(body?.error ?? 'Failed to remove alias');
+        return;
+      }
+      setAliasMessage('');
+      await loadAliases(asset.id);
+    } catch (err) {
+      console.error('Remove alias error:', err);
+      setAliasMessage('Failed to remove alias');
     }
   };
 
@@ -145,6 +221,44 @@ export default function EditAssetPage() {
           </div>
           <div>
             <strong>Ticker:</strong> {asset.ticker}
+          </div>
+          <div>
+            <label className="block font-medium mb-1">
+              Import Aliases <span className="font-normal text-sm text-foreground/60">(other symbols that mean this asset, e.g. a broker&apos;s &quot;CAKE.US&quot; for this ticker)</span>
+            </label>
+            {aliases.length > 0 && (
+              <ul className="mb-2 space-y-1">
+                {aliases.map((a) => (
+                  <li key={a.id} className="flex items-center justify-between border p-2 rounded">
+                    <span>{a.alias}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveAlias(a.id)}
+                      className="text-sm text-tred hover:underline"
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="e.g. CAKE.US"
+                value={newAlias}
+                onChange={(e) => setNewAlias(e.target.value)}
+                className="border p-2 flex-1"
+              />
+              <button
+                type="button"
+                onClick={handleAddAlias}
+                className="px-4 py-2 bg-themeblue text-white rounded hover:bg-themeblue-hover"
+              >
+                Add
+              </button>
+            </div>
+            {aliasMessage && <p className="mt-1 text-sm text-tred">{aliasMessage}</p>}
           </div>
           <div>
             <label className="block font-medium">Price Multiplier</label>

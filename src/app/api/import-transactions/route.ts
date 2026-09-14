@@ -13,6 +13,7 @@ import {
   type ManualTickerMetadata,
   type ResolvedNewAssetMeta,
 } from '@/lib/manualAssetMetadata';
+import { resolveImportTicker, type ImportAssetAlias } from '@/lib/assetResolution';
 import { processImportedTransfers } from '@/lib/transferImportIntegration';
 import { getSupabaseServerClient } from '@/lib/supabase-server';
 
@@ -222,18 +223,24 @@ export async function POST(req: NextRequest) {
       return v.toString().trim().replace(/[\u00A0\s,£$€¥]/g, '') || '';
     }
 
-    // Fetch portfolios (uses base_currency) and assets (include status if you want to block inactive).
+    // Fetch portfolios (uses base_currency), assets (include status if you want to block inactive),
+    // and asset_aliases (broker/source symbol -> canonical asset, e.g.
+    // "CAKE.US" -> the existing "CAKE" asset — see
+    // supabase/migrations/20260914160000_create_asset_aliases.sql and
+    // src/lib/assetResolution.ts for the resolution order this feeds).
     // Portfolios are explicitly scoped to the caller's own user_id — this
     // client is service-role and bypasses RLS, so without this filter a
     // CSV's portfolio-name matching below would search every user's
     // portfolios, letting one user's import land in another user's
-    // portfolio by name-guessing. `assets` is shared reference data and is
-    // deliberately NOT scoped by user.
-    const [{ data: portfolios }, { data: assets }] = await Promise.all([
+    // portfolio by name-guessing. `assets` and `asset_aliases` are shared
+    // reference data and are deliberately NOT scoped by user.
+    const [{ data: portfolios }, { data: assets }, { data: assetAliases }] = await Promise.all([
       supabase.from('portfolios').select('id, name, base_currency').eq('user_id', session.user.id),
       // include resolved_ticker so we can match CSVs against both ticker and resolved_ticker
       supabase.from('assets').select('id, ticker, currency, status, resolved_ticker'),
+      supabase.from('asset_aliases').select('alias, asset_id'),
     ]);
+    const aliases: ImportAssetAlias[] = assetAliases ?? [];
 
     // Build index for preview display and tolerant name lookups
     const portfoliosByNormalized = Object.fromEntries(
@@ -323,28 +330,10 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
-        // tolerant asset lookup: check ticker, resolved_ticker and .L / no-.L variants
-        function findAssetByTicker(tick: string | null) {
-          if (!tick) return null;
-          const t = tick.toUpperCase();
-          const candidates = (assets ?? []);
-          const byExact = (a: any, key: string) => ((a[key] ?? '').toString().toUpperCase() === t);
-
-          let a = candidates.find((c: any) => byExact(c, 'ticker') || byExact(c, 'resolved_ticker'));
-          if (a) return a;
-
-          // try toggling .L suffix
-          if (t.endsWith('.L')) {
-            const noL = t.replace(/\.L$/, '');
-            a = candidates.find((c: any) => (c.ticker ?? '').toUpperCase() === noL || (c.resolved_ticker ?? '').toUpperCase() === noL);
-          } else {
-            const withL = `${t}.L`;
-            a = candidates.find((c: any) => (c.ticker ?? '').toUpperCase() === withL || (c.resolved_ticker ?? '').toUpperCase() === withL);
-          }
-          return a ?? null;
-        }
-
-        const matchedAsset = findAssetByTicker(ticker);
+        // Resolution order: exact ticker/resolved_ticker match (incl. the
+        // .L toggle tolerance), then an explicit asset_aliases entry, then
+        // "potentially new". See src/lib/assetResolution.ts.
+        const matchedAsset = resolveImportTicker(ticker, assets ?? [], aliases);
         if (!matchedAsset) {
           // mark new tickers for lookup/insert; don't reject rows based on DB asset.status
           seenNewTickers.add(ticker);
@@ -502,6 +491,21 @@ export async function POST(req: NextRequest) {
         const rNoL = rt.replace(/\.L$/, '');
         assetsMap[rNoL] = assetsMap[rNoL] || { id: a.id, currency: a.currency };
       }
+    }
+    // Also index by alias, so a row whose raw ticker is an alias (e.g.
+    // "CAKE.US") resolves here exactly like its canonical ticker does — the
+    // same `aliases` list fetched at the top of this request (aliases are
+    // never created by this route, so it's still accurate here). Without
+    // this, a row would resolve correctly during cleaning (via
+    // resolveImportTicker) but then fail to find itself in assetsMap below,
+    // since assetsMap is otherwise keyed only by real ticker/resolved_ticker
+    // strings.
+    const updatedAssetsById = new Map((updatedAssets ?? []).map((a) => [a.id, a]));
+    for (const al of aliases) {
+      const aliasKey = (al.alias ?? '').toString().toUpperCase();
+      const target = updatedAssetsById.get(al.asset_id);
+      if (!aliasKey || !target || assetsMap[aliasKey]) continue;
+      assetsMap[aliasKey] = { id: target.id, currency: target.currency };
     }
     // Map portfolios by id with base_currency exposed as `currency`
     const portfoliosById = Object.fromEntries(
