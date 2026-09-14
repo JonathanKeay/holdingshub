@@ -8,7 +8,6 @@ import { resolveCashLeg, deriveAssetToBaseRate } from '@/lib/cashLeg';
 import { findUnresolvedTickerRows } from '@/lib/unresolvedTickers';
 import { splitTickersForLookup } from '@/lib/newTickerLookupCap';
 import {
-  resolveNewAssetMeta,
   filterTickersNeedingCreation,
   type ManualTickerMetadata,
   type ResolvedNewAssetMeta,
@@ -16,6 +15,7 @@ import {
 import { resolveImportTicker, type ImportAssetAlias } from '@/lib/assetResolution';
 import { processImportedTransfers } from '@/lib/transferImportIntegration';
 import { getSupabaseServerClient } from '@/lib/supabase-server';
+import { resolveConfirmTickerMeta } from '@/lib/confirmTickerMetaResolution';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -430,14 +430,15 @@ export async function POST(req: NextRequest) {
     );
 
     // Ensure we have metadata for new assets and currency is present.
-    // Automatic lookup is always attempted first (preserves the existing
-    // convenient flow) — manual metadata is only used when it doesn't
-    // return a currency.
+    // Automatic lookup is always attempted first and always preferred when
+    // it returns a currency — manual metadata is only ever used as a
+    // fallback. If a VALID manual currency is already present for a ticker
+    // (only possible once preview has already told the user automatic
+    // lookup found nothing), the automatic lookup is skipped for that
+    // ticker: its result could never be used over an already-valid manual
+    // currency. See src/lib/confirmTickerMetaResolution.ts.
     const resolvedMetas: ResolvedNewAssetMeta[] = await Promise.all(
-      normalizedConfirmed.map(async (t) => {
-        const auto = await fetchTickerMeta(t);
-        return resolveNewAssetMeta(auto, manualTickerMetadata[t]);
-      })
+      normalizedConfirmed.map((t) => resolveConfirmTickerMeta(t, manualTickerMetadata[t], fetchTickerMeta))
     );
 
     const missing = resolvedMetas.filter(
