@@ -22,7 +22,12 @@ export default function ImportPage() {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  // Which async action (if any) is currently in flight. A single piece of
+  // state drives both buttons' disabled state (isSubmitting below) and their
+  // loading label, so Preview Import and Confirm & Import can't be told
+  // apart from two separately-drifting booleans.
+  const [submittingAction, setSubmittingAction] = useState<'preview' | 'confirm' | null>(null);
+  const isSubmitting = submittingAction !== null;
   const [confirmedTickers, setConfirmedTickers] = useState<Record<string, boolean>>({});
   // Manual metadata entered by the user for tickers whose automatic lookup
   // didn't return a currency (see preview.newTickers[].needsManualCurrency).
@@ -60,7 +65,7 @@ export default function ImportPage() {
 
   const handlePreview = async () => {
     if (!file || isSubmitting) return;
-    setIsSubmitting(true);
+    setSubmittingAction('preview');
     setStatus('Previewing...');
     setUnresolvedTickerRows(null);
     setManualMeta({});
@@ -93,7 +98,7 @@ export default function ImportPage() {
       setPreview(null);
       setStatus(`Preview error: ${String(err)}`);
     } finally {
-      setIsSubmitting(false);
+      setSubmittingAction(null);
     }
   };
 
@@ -118,7 +123,7 @@ export default function ImportPage() {
       manualTickerMetadata[ticker] = { currency, name: entry?.name?.trim() || undefined };
     }
 
-    setIsSubmitting(true);
+    setSubmittingAction('confirm');
     setStatus('Importing...');
     setUnresolvedTickerRows(null);
     try {
@@ -147,7 +152,6 @@ export default function ImportPage() {
         if (Array.isArray(body?.unresolvedTickerRows) && body.unresolvedTickerRows.length > 0) {
           setUnresolvedTickerRows(body.unresolvedTickerRows);
         }
-        setIsSubmitting(false);
         return;
       }
 
@@ -162,7 +166,7 @@ export default function ImportPage() {
     } catch (err: any) {
       setStatus(`Import error: ${String(err)}`);
     } finally {
-      setIsSubmitting(false);
+      setSubmittingAction(null);
     }
   };
 
@@ -186,6 +190,8 @@ export default function ImportPage() {
     : previewDone
     ? postPreviewClasses
     : `${normalClasses} ${normalHover}`;
+
+  const confirmBtnClass = isSubmitting ? disabledClasses : `${normalClasses} ${normalHover}`;
 
   return (
     <main className="max-w-xl mx-auto p-6">
@@ -251,16 +257,16 @@ export default function ImportPage() {
           className={previewBtnClass}
           disabled={!file || isSubmitting}
         >
-          Preview Import
+          {submittingAction === 'preview' ? 'Previewing…' : 'Preview Import'}
         </button>
 
         {preview && preview.validCount > 0 && (
           <button
             onClick={handleConfirm}
-            className={`${normalClasses} ${normalHover} disabled:opacity-50`}
+            className={confirmBtnClass}
             disabled={isSubmitting}
           >
-            Confirm & Import
+            {submittingAction === 'confirm' ? 'Importing…' : 'Confirm & Import'}
           </button>
         )}
       </div>
