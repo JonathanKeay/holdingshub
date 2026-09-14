@@ -14,6 +14,7 @@ import {
   THEME_BLUE_DISABLED_BG,
 } from '../../lib/uiColors';
 import { ISO_CURRENCY_CODES } from '../../lib/manualAssetMetadata';
+import { withCurrencySelected } from '../../lib/importConfirmSelection';
 
 const CURRENCY_OPTIONS = Array.from(ISO_CURRENCY_CODES).sort();
 
@@ -315,23 +316,29 @@ export default function ImportPage() {
                     </div>
 
                     {needsManualCurrency && (
-                      <div className="mt-1 ml-6 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm">
+                      <div className="mt-1 ml-6 p-3 bg-yellow-50 border border-yellow-200 rounded text-sm">
                         <div className="mb-2 text-foreground/80">
                           {ticker} is genuinely new, but automatic lookup couldn&apos;t determine its currency.
-                          Confirm the ticker and select its currency below before importing.
+                          Select its currency below to confirm {ticker} for import.
                         </div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <label className="text-xs text-foreground/60">
-                            Currency
+                        <div className="flex items-end gap-3 flex-wrap">
+                          <label className="text-sm text-foreground/60">
+                            <span className="block mb-1">Currency</span>
                             <select
-                              className="ml-1 border rounded px-1 py-0.5 bg-background"
+                              className="border p-2 rounded bg-background text-foreground"
                               value={manualMeta[ticker]?.currency || ''}
-                              onChange={(e) =>
+                              onChange={(e) => {
+                                const currency = e.target.value;
                                 setManualMeta((prev) => ({
                                   ...prev,
-                                  [ticker]: { ...prev[ticker], currency: e.target.value, name: prev[ticker]?.name || '' },
-                                }))
-                              }
+                                  [ticker]: { ...prev[ticker], currency, name: prev[ticker]?.name || '' },
+                                }));
+                                // Selecting a currency confirms the ticker too — see
+                                // src/lib/importConfirmSelection.ts for why (this is
+                                // the fix for the 2026-09-14 SHOP DEV acceptance-test
+                                // failure).
+                                setConfirmedTickers((prev) => withCurrencySelected(prev, ticker, currency));
+                              }}
                             >
                               <option value="">-- select --</option>
                               {CURRENCY_OPTIONS.map((code) => (
@@ -339,11 +346,11 @@ export default function ImportPage() {
                               ))}
                             </select>
                           </label>
-                          <label className="text-xs text-foreground/60">
-                            Name (optional)
+                          <label className="text-sm text-foreground/60">
+                            <span className="block mb-1">Name (optional)</span>
                             <input
                               type="text"
-                              className="ml-1 border rounded px-1 py-0.5 bg-background"
+                              className="border p-2 rounded bg-background text-foreground"
                               value={manualMeta[ticker]?.name || ''}
                               onChange={(e) =>
                                 setManualMeta((prev) => ({
