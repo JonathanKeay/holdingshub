@@ -12,7 +12,8 @@ import {
   type ManualTickerMetadata,
   type ResolvedNewAssetMeta,
 } from '@/lib/manualAssetMetadata';
-import { resolveImportTicker, type ImportAssetAlias } from '@/lib/assetResolution';
+import { resolveImportTicker, type ImportAsset, type ImportAssetAlias } from '@/lib/assetResolution';
+import { resolveImportReferenceData } from '@/lib/importReferenceData';
 import { processImportedTransfers } from '@/lib/transferImportIntegration';
 import { getSupabaseServerClient } from '@/lib/supabase-server';
 import { resolveConfirmTickerMeta } from '@/lib/confirmTickerMetaResolution';
@@ -251,13 +252,40 @@ export async function POST(req: NextRequest) {
     // portfolios, letting one user's import land in another user's
     // portfolio by name-guessing. `assets` and `asset_aliases` are shared
     // reference data and are deliberately NOT scoped by user.
-    const [{ data: portfolios }, { data: assets }, { data: assetAliases }] = await Promise.all([
+    const [portfoliosResult, assetsResult, assetAliasesResult] = await Promise.all([
       supabase.from('portfolios').select('id, name, base_currency').eq('user_id', session.user.id),
       // include resolved_ticker so we can match CSVs against both ticker and resolved_ticker
       supabase.from('assets').select('id, ticker, currency, status, resolved_ticker'),
       supabase.from('asset_aliases').select('alias, asset_id'),
     ]);
-    const aliases: ImportAssetAlias[] = assetAliases ?? [];
+
+    // Fail closed: a failed reference-data fetch must NEVER be silently
+    // downgraded to an empty result — see src/lib/importReferenceData.ts
+    // for why (the CAKE.US intermittent-preview investigation). Abort the
+    // whole request rather than partially proceeding with a default empty
+    // array for whichever query failed.
+    // portfolios' generic is deliberately left as `any` here, matching its
+    // prior implicit typing: this file's existing portfoliosById fallback
+    // (`|| { currency: null }`, below) already assumes a loosely-typed
+    // portfolio shape in a couple of places, and tightening it is a
+    // separate, unrelated type-safety cleanup — not part of this fix.
+    const referenceData = resolveImportReferenceData<any, ImportAsset, ImportAssetAlias>(
+      portfoliosResult,
+      assetsResult,
+      assetAliasesResult
+    );
+    if (!referenceData.ok) {
+      console.error('Import reference-data fetch failed:', {
+        portfoliosError: portfoliosResult.error ?? null,
+        assetsError: assetsResult.error ?? null,
+        assetAliasesError: assetAliasesResult.error ?? null,
+      });
+      return NextResponse.json(
+        safe({ message: 'Failed to load reference data for import. Please retry.' }),
+        { status: 500 }
+      );
+    }
+    const { portfolios, assets, aliases } = referenceData;
 
     // Build index for preview display and tolerant name lookups
     const portfoliosByNormalized = Object.fromEntries(
