@@ -153,3 +153,80 @@ export function deriveAssetToBaseRate(
   if (!isPositiveFinite(rate)) return null;
   return rate;
 }
+
+// ---------------------------------------------------------------------------
+// Row-level wiring shared by every importer/UI call site that needs a cash
+// leg resolved from CSV-shaped inputs (an explicit cash value, an explicit
+// FX rate, and a same-day fx_rates cache row). Kept here — not duplicated at
+// each call site — so BUY/SELL and every other cash-moving transaction type
+// go through the exact same trust order and blocking rule. See the
+// SAP.DE DIV / ETRO DEP investigation for why this was extended beyond
+// BUY/SELL.
+// ---------------------------------------------------------------------------
+
+/**
+ * Transaction types that are ALWAYS a genuine cash movement in the resolved
+ * asset's own currency (a dividend, interest payment, deposit, withdrawal,
+ * fee, or generic cash event such as withholding tax) — exactly the same FX
+ * risk as a BUY/SELL settlement leg. TIN/TOT are handled separately by
+ * shouldApplyCashLegGate below: only a CASH.*-ticker TIN/TOT (a real
+ * cross-portfolio cash transfer) gets this treatment. An ordinary security
+ * TIN/TOT is an in-kind transfer whose cash_value/cash_ccy are never read by
+ * any downstream calculation (cost comes from settle_value), so gating it on
+ * FX availability would silently drop legitimate transfers for no benefit.
+ */
+export const CASH_LEG_TRANSACTION_TYPES: ReadonlySet<string> = new Set([
+  'DIV', 'INT', 'DEP', 'WIT', 'FEE', 'OTR',
+]);
+
+/**
+ * Decide whether a transaction row of this type should go through the
+ * FX-safe cash-leg gate (resolveRowCashLeg) at all, given whether its own
+ * asset is a CASH.* pseudo-ticker (a real cash-transfer TIN/TOT) or not.
+ */
+export function shouldApplyCashLegGate(type: string, isCashAssetTicker: boolean): boolean {
+  return (
+    type === 'BUY' ||
+    type === 'SELL' ||
+    CASH_LEG_TRANSACTION_TYPES.has(type) ||
+    ((type === 'TIN' || type === 'TOT') && isCashAssetTicker)
+  );
+}
+
+/**
+ * Resolve a row's cash leg from CSV-shaped inputs: an explicit cash value
+ * (already understood to be in baseCcy), an explicit FX rate, and the
+ * same-day fx_rates cache quotes (if any). This is the single place that
+ * derives cachedRateAssetToBase and calls resolveCashLeg — reused by every
+ * cash-moving transaction type so none of them can drift into a subtly
+ * different FX implementation.
+ */
+export function resolveRowCashLeg(
+  assetCcy: string | null | undefined,
+  baseCcy: string | null | undefined,
+  settleAbs: number,
+  explicitCashValue: number | null,
+  explicitFxRate: number | null,
+  quotesForDate: Record<string, number> | undefined
+): CashLegOutcome {
+  // Only attempt the cache when there's no USABLE explicit rate — a CSV
+  // fxrate of 0 (this fix's whole trigger case: the eToro CAKE/SAP.DE rows)
+  // is exactly as "missing" as a blank one for this purpose. Checking
+  // `explicitFxRate == null` alone would skip the cache fallback whenever
+  // the CSV wrote a literal 0, forcing an unnecessary block even when a
+  // cached rate was available.
+  const hasUsableExplicitFxRate = typeof explicitFxRate === 'number' && isFinite(explicitFxRate) && explicitFxRate > 0;
+  const cachedRateAssetToBase =
+    explicitCashValue == null && !hasUsableExplicitFxRate
+      ? deriveAssetToBaseRate(quotesForDate, assetCcy, baseCcy)
+      : null;
+
+  return resolveCashLeg({
+    assetCcy,
+    baseCcy,
+    settleAbs,
+    explicitCashValue,
+    explicitFxRate,
+    cachedRateAssetToBase,
+  });
+}

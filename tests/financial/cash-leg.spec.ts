@@ -10,7 +10,12 @@
 // real data as the SAP.DE / ETRO row in the Definition B investigation.
 
 import { describe, it, expect } from 'vitest';
-import { resolveCashLeg, deriveAssetToBaseRate } from '../../src/lib/cashLeg';
+import {
+  resolveCashLeg,
+  deriveAssetToBaseRate,
+  resolveRowCashLeg,
+  shouldApplyCashLegGate,
+} from '../../src/lib/cashLeg';
 
 describe('resolveCashLeg — GBP asset in a GBP portfolio (same currency)', () => {
   it('preserves current behaviour exactly: cash_value = settleAbs, fx = 1, no FX path touched', () => {
@@ -193,5 +198,150 @@ describe('deriveAssetToBaseRate — pure FX-cache derivation (ported from the de
   it('returns null when quotes are missing for the required pair', () => {
     expect(deriveAssetToBaseRate({}, 'USD', 'GBP')).toBeNull();
     expect(deriveAssetToBaseRate(null, 'USD', 'GBP')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Extension of the cash-leg fix to non-BUY/SELL transaction types (DIV, INT,
+// DEP, WIT, FEE, OTR, and CASH.*-ticker TIN/TOT). Context: a real CAKE/USD
+// dividend imported with CSV fxrate=0 was harmless by coincidence (same
+// currency), but the SAME import also produced a SAP.DE/EUR dividend and two
+// GBP deposits with cash_fx_to_portfolio=0 that were mislabelled as USD
+// 1:1 — a genuine understatement of portfolio cash. See the DIV/DEP cash-leg
+// investigation. These tests pin resolveRowCashLeg/shouldApplyCashLegGate,
+// the shared helpers route.ts now uses for every cash-moving type.
+// ---------------------------------------------------------------------------
+
+describe('shouldApplyCashLegGate — which transaction types go through the FX-safe gate', () => {
+  it('BUY and SELL always do', () => {
+    expect(shouldApplyCashLegGate('BUY', false)).toBe(true);
+    expect(shouldApplyCashLegGate('SELL', false)).toBe(true);
+  });
+
+  it('DIV, INT, DEP, WIT, FEE, OTR always do, regardless of ticker', () => {
+    for (const type of ['DIV', 'INT', 'DEP', 'WIT', 'FEE', 'OTR']) {
+      expect(shouldApplyCashLegGate(type, false)).toBe(true);
+      expect(shouldApplyCashLegGate(type, true)).toBe(true);
+    }
+  });
+
+  it('TIN/TOT only go through the gate when booked against a CASH.* ticker', () => {
+    expect(shouldApplyCashLegGate('TIN', true)).toBe(true);
+    expect(shouldApplyCashLegGate('TOT', true)).toBe(true);
+    // An ordinary security TIN/TOT is an in-kind transfer: cash_value is
+    // never read downstream, so it must NOT be gated on FX availability —
+    // that would silently drop a legitimate transfer.
+    expect(shouldApplyCashLegGate('TIN', false)).toBe(false);
+    expect(shouldApplyCashLegGate('TOT', false)).toBe(false);
+  });
+
+  it('SPL is never gated (handled entirely separately, before this logic runs)', () => {
+    expect(shouldApplyCashLegGate('SPL', false)).toBe(false);
+    expect(shouldApplyCashLegGate('SPL', true)).toBe(false);
+  });
+});
+
+describe('resolveRowCashLeg — USD/USD dividend, CSV fxrate 0 (the real CAKE row)', () => {
+  it('resolves cleanly to same-currency, fx = 1 — never trusts the CSV\'s 0', () => {
+    const outcome = resolveRowCashLeg('USD', 'USD', 1.28, null, 0, undefined);
+    expect(outcome).toEqual({
+      status: 'ok',
+      cash_value: 1.28,
+      cash_ccy: 'USD',
+      cash_fx_to_portfolio: 1,
+      source: 'same-currency',
+    });
+  });
+});
+
+describe('resolveRowCashLeg — EUR/USD dividend with a valid explicit FX rate', () => {
+  it('converts settleAbs using the explicit rate', () => {
+    const outcome = resolveRowCashLeg('EUR', 'USD', 0.42, null, 1.1774, undefined);
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_fx_to_portfolio).toBe(1.1774);
+    expect(outcome.cash_value).toBeCloseTo(0.42 * 1.1774, 6);
+    expect(outcome.cash_ccy).toBe('USD');
+    expect(outcome.source).toBe('explicit-fx-rate');
+  });
+});
+
+describe('resolveRowCashLeg — EUR/USD dividend, CSV fxrate 0, but a cached rate exists for the trade date', () => {
+  it('derives a correct USD cash_value from the fx_rates cache instead of trusting the 0 (the real SAP.DE 2026-05-08 row)', () => {
+    // Real cached fx_rates quotes row for 2026-05-08 (GBP-per-unit-foreign):
+    // GBPEUR 1.156648, GBPUSD 1.361628 -> EUR->USD = (1/1.156648)*1.361628.
+    const quotesForDate = { GBPEUR: 1.156648, GBPUSD: 1.361628 };
+    const expectedRate = (1 / 1.156648) * 1.361628;
+
+    const outcome = resolveRowCashLeg('EUR', 'USD', 0.42, null, 0, quotesForDate);
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_fx_to_portfolio).toBeCloseTo(expectedRate, 6);
+    expect(outcome.cash_value).toBeCloseTo(0.42 * expectedRate, 6);
+    expect(outcome.cash_ccy).toBe('USD');
+    expect(outcome.source).toBe('cached-fx-rate');
+    // Sanity: this is the FIX — old behaviour silently stored cash_value =
+    // 0.42 (== settleAbs) with cash_ccy 'USD' and fx 0, i.e. treated €0.42
+    // as $0.42. The corrected value must differ from that.
+    expect(outcome.cash_value).not.toBeCloseTo(0.42, 2);
+  });
+});
+
+describe('resolveRowCashLeg — EUR/USD dividend, CSV fxrate 0 and no cached rate available (the real 2025-05-16 SAP.DE row)', () => {
+  it('is blocked, not silently imported as if EUR were USD', () => {
+    // HoldingsHub's fx_rates cache only goes back to 2025-07-21 (verified
+    // against the local dev database) — this trade date has no cached row.
+    const outcome = resolveRowCashLeg('EUR', 'USD', 0.38, null, 0, undefined);
+    expect(outcome.status).toBe('blocked');
+    expect((outcome as any).cash_value).toBeUndefined();
+    expect((outcome as any).cash_ccy).toBeUndefined();
+  });
+});
+
+describe('resolveRowCashLeg — GBP/USD deposit, CSV fxrate 0, no cached rate available (the real 2024-11-23 ETRO DEP row)', () => {
+  it('is blocked rather than recording £5,024.91 as if it were $5,024.91', () => {
+    const outcome = resolveRowCashLeg('GBP', 'USD', 5024.91, null, 0, undefined);
+    expect(outcome.status).toBe('blocked');
+    if (outcome.status === 'blocked') {
+      expect(outcome.reason).toMatch(/no reliable/i);
+    }
+  });
+
+  it('would have correctly converted it had a cached rate existed (documenting the fix, not just the block)', () => {
+    // Illustrative: GBP/USD ~1.2528 on 2024-11-22 (external reference rate;
+    // not itself stored by HoldingsHub, whose fx_rates cache does not reach
+    // back this far — see the blocked-outcome test above).
+    const quotesForDate = { GBPUSD: 1.2528 };
+    const outcome = resolveRowCashLeg('GBP', 'USD', 5024.91, null, 0, quotesForDate);
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_fx_to_portfolio).toBeCloseTo(1.2528, 6);
+    expect(outcome.cash_value).toBeCloseTo(5024.91 * 1.2528, 2);
+  });
+});
+
+describe('resolveRowCashLeg — BUY/SELL behaviour is unchanged by this fix', () => {
+  it('matches resolveCashLeg exactly for the same-currency case', () => {
+    const viaShared = resolveRowCashLeg('GBP', 'GBP', 1005, null, null, undefined);
+    const viaDirect = resolveCashLeg({ assetCcy: 'GBP', baseCcy: 'GBP', settleAbs: 1005 });
+    expect(viaShared).toEqual(viaDirect);
+  });
+
+  it('matches resolveCashLeg exactly for the blocked real SAP.DE BUY shape', () => {
+    const viaShared = resolveRowCashLeg('EUR', 'USD', 50.00000000742, null, null, undefined);
+    const viaDirect = resolveCashLeg({ assetCcy: 'EUR', baseCcy: 'USD', settleAbs: 50.00000000742 });
+    expect(viaShared.status).toBe('blocked');
+    expect(viaShared).toEqual(viaDirect);
+  });
+
+  it('matches resolveCashLeg exactly when an explicit cash_value is supplied', () => {
+    const viaShared = resolveRowCashLeg('USD', 'GBP', 13799.5046, 10047.97128, null, undefined);
+    const viaDirect = resolveCashLeg({
+      assetCcy: 'USD',
+      baseCcy: 'GBP',
+      settleAbs: 13799.5046,
+      explicitCashValue: 10047.97128,
+    });
+    expect(viaShared).toEqual(viaDirect);
   });
 });

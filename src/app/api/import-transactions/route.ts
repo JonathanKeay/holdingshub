@@ -4,7 +4,7 @@ import { parse } from 'csv-parse/sync';
 import { z } from 'zod';
 import { DateTime } from 'luxon';
 import { createClient } from '@supabase/supabase-js';
-import { resolveCashLeg, deriveAssetToBaseRate } from '@/lib/cashLeg';
+import { resolveRowCashLeg, shouldApplyCashLegGate } from '@/lib/cashLeg';
 import { findUnresolvedTickerRows } from '@/lib/unresolvedTickers';
 import { splitTickersForLookup } from '@/lib/newTickerLookupCap';
 import {
@@ -14,7 +14,7 @@ import {
 } from '@/lib/manualAssetMetadata';
 import { resolveImportTicker, type ImportAsset, type ImportAssetAlias } from '@/lib/assetResolution';
 import { resolveImportReferenceData } from '@/lib/importReferenceData';
-import { processImportedTransfers } from '@/lib/transferImportIntegration';
+import { processImportedTransfers, isCashTicker } from '@/lib/transferImportIntegration';
 import { getSupabaseServerClient } from '@/lib/supabase-server';
 import { resolveConfirmTickerMeta } from '@/lib/confirmTickerMetaResolution';
 import { enrichNewAssetDomain } from '@/lib/newAssetDomainEnrichment';
@@ -51,6 +51,10 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
     new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
   ]);
 }
+
+// resolveRowCashLeg / shouldApplyCashLegGate live in src/lib/cashLeg.ts —
+// shared with any other call site that needs the same FX-safe cash-leg
+// resolution (see that file for the type-by-type rationale).
 
 // dynamic import of yahoo-finance2 so module load failures don't crash the route
 async function fetchTickerMeta(inputTicker: string) {
@@ -713,24 +717,21 @@ export async function POST(req: NextRequest) {
       let cash_ccy: string | null;
       let cash_fx_to_portfolio: number | null;
 
-      if (type === 'BUY' || type === 'SELL') {
+      if (shouldApplyCashLegGate(type, isCashTicker(base))) {
         // The fallback fix: never silently relabel a native settlement
-        // amount as portfolio-base cash. See src/lib/cashLeg.ts.
+        // amount as portfolio-base cash. See src/lib/cashLeg.ts. Originally
+        // BUY/SELL only; extended to DIV/INT/DEP/WIT/FEE/OTR and CASH.*
+        // TIN/TOT by the SAP.DE DIV / ETRO DEP investigation — those are
+        // genuine cash movements with exactly the same FX risk.
         const explicitCashValue = raw.cash_value == null ? null : Number(raw.cash_value);
-        const quotesForDate = fxQuotesByDate[raw.date_time];
-        const cachedRateAssetToBase =
-          explicitCashValue == null && fxrate == null
-            ? deriveAssetToBaseRate(quotesForDate, assetMeta.currency, portfolioMeta.currency)
-            : null;
-
-        const cashLeg = resolveCashLeg({
-          assetCcy: assetMeta.currency,
-          baseCcy: portfolioMeta.currency,
-          settleAbs: Math.abs(settle_value),
+        const cashLeg = resolveRowCashLeg(
+          assetMeta.currency,
+          portfolioMeta.currency,
+          Math.abs(settle_value),
           explicitCashValue,
-          explicitFxRate: fxrate,
-          cachedRateAssetToBase,
-        });
+          fxrate,
+          fxQuotesByDate[raw.date_time]
+        );
 
         if (cashLeg.status === 'blocked') {
           skippedCashLeg.push({
@@ -747,7 +748,15 @@ export async function POST(req: NextRequest) {
         cash_ccy = cashLeg.cash_ccy;
         cash_fx_to_portfolio = cashLeg.cash_fx_to_portfolio;
       } else {
-        // All other types (DIV/INT/DEP/WIT/FEE/OTR/TIN/TOT): unchanged.
+        // TIN/TOT for an ordinary (non-cash-ticker) security: an in-kind
+        // transfer whose cash_value/cash_ccy are never consulted by any
+        // downstream calculation — cost is booked from settle_value instead
+        // (see queries.ts's applyTransactionToHolding and
+        // transferCostBasis.ts). Deliberately NOT run through the cash-leg
+        // FX gate above: doing so would silently drop a legitimate transfer
+        // (units and settle-side cost included) whenever no FX info exists
+        // for an amount nothing ever reads. Formula unchanged from before
+        // this fix.
         const cashFromCsv = raw.cash_value == null ? null : Number(raw.cash_value);
         cash_value = cashFromCsv != null ? cashFromCsv : (quantity * price + fee);
         cash_ccy = portfolioMeta.currency ?? null;
