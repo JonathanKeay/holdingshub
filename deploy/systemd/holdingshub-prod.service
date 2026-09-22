@@ -1,19 +1,24 @@
+# Reconciled against the live unit installed at
+# /etc/systemd/system/holdingshub-prod.service on 172.16.20.225
+# (hostname holdingshub-prod) on 2026-09-22 — verified active in production.
+# Repo: /opt/holdingshub. Env: /etc/holdingshub/holdingshub-prod.env.
+# See deploy/systemd/README-LXC.md and README.md's "Environment Topology".
+
 [Unit]
-Description=HoldingsHub - Production (Next.js)
+Description=HoldingsHub Production
 After=network.target
 
 [Service]
 Type=simple
+User=jonathan
+Group=jonathan
+WorkingDirectory=/opt/holdingshub
 Environment=NODE_ENV=production
 Environment=PORT=3000
-EnvironmentFile=/opt/holdingshub-prod/holdingshub-prod.env
-# Adjust path to your prod checkout
-WorkingDirectory=/opt/holdingshub-prod
+EnvironmentFile=/etc/holdingshub/holdingshub-prod.env
 ExecStart=/usr/bin/npm start --silent
 Restart=always
 RestartSec=5
-# User=www-data
-# Group=www-data
 
 [Install]
 WantedBy=multi-user.target

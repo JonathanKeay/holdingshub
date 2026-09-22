@@ -1,3 +1,15 @@
+# ============================================================
+# LEGACY / DEPRECATED — NOT USED IN CURRENT PRODUCTION
+# Confirmed ABSENT from the live 172.16.20.225 (holdingshub-prod) host
+# as of 2026-09-22. Current production units are:
+#   deploy/systemd/holdingshub-prod.service
+#   deploy/systemd/holdingshub-prices.service
+# This old-named standalone unit (pre-dating the holdingshub-prod /
+# holdingshub-prices split, and the old /opt/portfolio-tracker path)
+# is kept only for historical reference. Do not install this on
+# production. See README.md's "Environment Topology" section.
+# ============================================================
+
 [Unit]
 Description=Portfolio Tracker (Next.js) - standalone
 After=network.target

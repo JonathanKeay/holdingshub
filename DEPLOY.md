@@ -1,5 +1,7 @@
 # Deploying HoldingsHub on Proxmox (Docker + Caddy)
 
+> **⚠️ LEGACY / RETIRED DEPLOYMENT METHOD.** This guide describes the Docker Compose + Caddy stack that used to run HoldingsHub production on `172.16.20.227`. As of the 2026-09-14 promotion, **current production runs on `172.16.20.225` via systemd** (`holdingshub-prod.service` + `holdingshub-prices.service` — see [deploy/systemd](deploy/systemd)). This document is kept for historical/rollback reference only — do not follow it to deploy or change current production. See the "Environment Topology" section in [README.md](README.md) for the authoritative current topology.
+
 This guide gets HoldingsHub reachable from mobile and desktop via a domain with HTTPS, running on a Proxmox VM using Docker.
 
 ## Prereqs

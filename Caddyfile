@@ -1,3 +1,15 @@
+# ============================================================
+# LEGACY / RETIRED CONFIGURATION
+# This Caddyfile served the Docker Compose + Caddy production
+# stack previously running on 172.16.20.227. As of the
+# 2026-09-14 promotion, current production runs on 172.16.20.225
+# via systemd (holdingshub-prod.service + holdingshub-prices.service)
+# and does not use this file at all.
+# Kept for historical/rollback reference only — functional
+# config below is UNCHANGED.
+# See README.md "Environment Topology" and deploy/systemd/.
+# ============================================================
+
 {
   # Keep LAN/IP access on plain HTTP unless the user explicitly chooses HTTPS.
   # This avoids iOS Safari's HTTPS-first / Private Relay interstitial issues with bare IPs.

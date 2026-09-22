@@ -52,7 +52,9 @@ docker compose -f docker-compose.dev.yml down -v
 
 ## Production Stack (server)
 
-Prod is defined in `docker-compose.yml` and served by Caddy at http://172.16.20.227.
+> **Current production (since 2026-09-14) runs on `172.16.20.225` via systemd** — `holdingshub-prod.service` + `holdingshub-prices.service`, not Docker/Caddy. See [deploy/systemd](../deploy/systemd) and the "Environment Topology" section in [README.md](../README.md). Everything below in this section describes the **retired** Docker Compose + Caddy stack that used to run on `172.16.20.227` — kept for historical/rollback reference only.
+
+Legacy (retired): prod used to be defined in `docker-compose.yml` and served by Caddy at http://172.16.20.227.
 
 ```bash
 docker compose build --no-cache app
@@ -63,9 +65,10 @@ docker compose logs --tail=120 app
 
 ## Environment Files
 
-- Docker runtime: `.env.docker` — public origin is set to `http://172.16.20.227`.
+- Legacy/retired Docker stack: `.env.docker` — public origin was set to `http://172.16.20.227`.
+- Current production (225): environment is managed via the systemd unit's `EnvironmentFile` — see [deploy/systemd](../deploy/systemd). The paths in those tracked unit files need reconciling against what's actually deployed on 225 (not verified from this dev checkout — see README.md's Environment Topology section).
 - Local dev: `.env.local` — use `http://localhost:3000`.
-- Build-time in Docker: `NEXT_PUBLIC_*` are baked into the client bundle via Dockerfile `ARG`s — rebuild after changes.
+- Build-time in Docker: `NEXT_PUBLIC_*` are baked into the client bundle via Dockerfile `ARG`s — rebuild after changes (legacy Docker stack only).
 
 ## Price Streamer
 
@@ -75,7 +78,9 @@ Local:
 npm run prices:stream
 ```
 
-Docker (prod): `prices` service runs automatically.
+Current production (225): runs as the systemd unit `holdingshub-prices.service` — see [deploy/systemd](../deploy/systemd).
+
+Legacy/retired Docker stack: the `prices` service ran automatically.
 
 ## Troubleshooting
 
@@ -85,7 +90,7 @@ Docker (prod): `prices` service runs automatically.
 ss -ltnp | awk 'NR==1 || /:3000|:4000/'
 ```
 
-- Caddy → app routing: see `Caddyfile` (proxies to `app:3000`).
+- Caddy → app routing (legacy/retired 227 stack only): see `Caddyfile` (proxies to `app:3000`).
 - Icons/logos: proxy uses Logo.dev only (see `src/app/api/logo-proxy/route.ts`).
 
 ## Housekeeping
