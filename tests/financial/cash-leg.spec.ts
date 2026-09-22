@@ -15,6 +15,7 @@ import {
   deriveAssetToBaseRate,
   resolveRowCashLeg,
   shouldApplyCashLegGate,
+  resolveUngatedCashValue,
 } from '../../src/lib/cashLeg';
 
 describe('resolveCashLeg — GBP asset in a GBP portfolio (same currency)', () => {
@@ -235,6 +236,17 @@ describe('shouldApplyCashLegGate — which transaction types go through the FX-s
     expect(shouldApplyCashLegGate('TOT', false)).toBe(false);
   });
 
+  it('FXM is NEVER gated, regardless of ticker — its cash_value is already the final signed base-currency amount', () => {
+    // This is the critical case: FXM's own asset is CASH.GBP (isCashAssetTicker
+    // = true), which for BUY/SELL/TIN/TOT would matter — but FXM must bypass
+    // the gate unconditionally. If FXM were routed through resolveRowCashLeg
+    // instead, its CASH.GBP-in-a-GBP-portfolio same-currency case would hit
+    // resolveCashLeg's same-currency branch, which returns Math.abs(settleAbs)
+    // — silently discarding the sign of every realised FX loss.
+    expect(shouldApplyCashLegGate('FXM', true)).toBe(false);
+    expect(shouldApplyCashLegGate('FXM', false)).toBe(false);
+  });
+
   it('SPL is never gated (handled entirely separately, before this logic runs)', () => {
     expect(shouldApplyCashLegGate('SPL', false)).toBe(false);
     expect(shouldApplyCashLegGate('SPL', true)).toBe(false);
@@ -343,5 +355,50 @@ describe('resolveRowCashLeg — BUY/SELL behaviour is unchanged by this fix', ()
       explicitCashValue: 10047.97128,
     });
     expect(viaShared).toEqual(viaDirect);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveUngatedCashValue — the row-construction path used for rows that
+// shouldApplyCashLegGate excludes (FXM, and an ordinary-security TIN/TOT).
+// This is the exact function src/app/api/import-transactions/route.ts calls
+// in its `else` branch, extracted so it's directly testable. These are
+// REGRESSION tests: they exist because a sign-loss defect was found in the
+// GATED path (resolveCashLeg's same-currency branch, and its
+// isPositiveFinite(explicitCashValue) guard) — this proves the UNGATED path
+// FXM actually uses does not share that defect.
+// ---------------------------------------------------------------------------
+
+describe('resolveUngatedCashValue — FXM row construction: sign and precision must survive unchanged', () => {
+  it('a negative explicit cash_value is returned exactly as-is, sign intact (the -5.343045 case from the FXM design report)', () => {
+    expect(resolveUngatedCashValue(-5.343045, 1, -5.343045, 0)).toBe(-5.343045);
+  });
+
+  it('does NOT flip the sign the way the same-currency cash-leg-gate branch would', () => {
+    // If this row were wrongly routed through resolveCashLeg with
+    // assetCcy === baseCcy (exactly FXM's CASH.GBP-in-a-GBP-portfolio case),
+    // the result would be Math.abs(5.343045) = 5.343045 (wrong sign).
+    const wrongGatedResult = resolveCashLeg({ assetCcy: 'GBP', baseCcy: 'GBP', settleAbs: 5.343045 });
+    expect(wrongGatedResult.status).toBe('ok');
+    if (wrongGatedResult.status === 'ok') expect(wrongGatedResult.cash_value).toBe(5.343045); // positive: the bug this path avoids
+
+    const actualUngatedResult = resolveUngatedCashValue(-5.343045, 1, -5.343045, 0);
+    expect(actualUngatedResult).toBe(-5.343045); // negative: correct
+  });
+
+  it('a positive explicit cash_value is returned exactly as-is', () => {
+    expect(resolveUngatedCashValue(10.25, 1, 10.25, 0)).toBe(10.25);
+  });
+
+  it('a small high-precision negative value retains full precision (-0.000322, real ISA 2026-04-01 daily aggregate)', () => {
+    expect(resolveUngatedCashValue(-0.000322, 1, -0.000322, 0)).toBe(-0.000322);
+  });
+
+  it('falls back to quantity*price+fee only when no explicit cash_value is supplied at all', () => {
+    expect(resolveUngatedCashValue(null, 2, 3, 1)).toBe(7); // 2*3+1, unchanged legacy TIN/TOT fallback
+  });
+
+  it('an explicit zero is trusted as zero, not treated as "missing"', () => {
+    expect(resolveUngatedCashValue(0, 100, 100, 0)).toBe(0);
   });
 });

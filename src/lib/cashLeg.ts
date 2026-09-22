@@ -174,6 +174,14 @@ export function deriveAssetToBaseRate(
  * TIN/TOT is an in-kind transfer whose cash_value/cash_ccy are never read by
  * any downstream calculation (cost comes from settle_value), so gating it on
  * FX availability would silently drop legitimate transfers for no benefit.
+ *
+ * FXM (Foreign Exchange Movement) is DELIBERATELY NOT in this set. FXM's
+ * cash_value already IS the final, signed, portfolio-base-currency amount —
+ * there is no native-currency settlement leg to convert. Routing it through
+ * this gate would be wrong twice over: resolveCashLeg's same-currency branch
+ * (asset ccy === base ccy, which is exactly FXM's CASH.* case) returns
+ * Math.abs(settleAbs), discarding the sign entirely, and a realised FX LOSS
+ * must stay negative. Do not add FXM here.
  */
 export const CASH_LEG_TRANSACTION_TYPES: ReadonlySet<string> = new Set([
   'DIV', 'INT', 'DEP', 'WIT', 'FEE', 'OTR',
@@ -229,4 +237,26 @@ export function resolveRowCashLeg(
     explicitFxRate,
     cachedRateAssetToBase,
   });
+}
+
+/**
+ * Resolve cash_value for a row whose type does NOT go through the cash-leg
+ * gate above (shouldApplyCashLegGate returned false) — currently: an
+ * ordinary-security TIN/TOT, and FXM. Trusts an explicit CSV cash_value
+ * exactly as supplied (sign and magnitude both preserved — no Math.abs, no
+ * currency conversion, no cash-leg blocking), falling back to
+ * quantity*price+fee only when no explicit value was supplied at all.
+ *
+ * This is the ONLY correct path for FXM: FXM's cash_value already IS the
+ * final, signed, portfolio-base-currency amount, so it must pass through
+ * completely unchanged (see the note on CASH_LEG_TRANSACTION_TYPES above for
+ * why FXM must never be routed through resolveRowCashLeg instead).
+ */
+export function resolveUngatedCashValue(
+  explicitCashValue: number | null,
+  quantity: number,
+  price: number,
+  fee: number
+): number {
+  return explicitCashValue != null ? explicitCashValue : (quantity * price + fee);
 }

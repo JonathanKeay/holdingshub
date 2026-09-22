@@ -134,6 +134,7 @@ const TRANSACTION_TYPE_META = {
   OTR:  { units: 0,  cost: 0,  realised: 0 }, // generic transfer (cash-only, handled in cash logic)
   SPL:  { units: 0,  cost: 0,  realised: 0 }, // stock split
   BAL:  { units: 0,  cost: 0,  realised: 0 }, // cash balance adj (cash-only)
+  FXM:  { units: 0,  cost: 0,  realised: 0 }, // realised FX movement on base-currency cash (cash-only, handled in cash logic)
 } as const;
 
 const CASH_EVENTS_REQUIRE_CASH_ASSET = true;
@@ -195,6 +196,7 @@ const TYPE_PRIORITY: Record<string, number> = {
   DEP: 97,
   WIT: 98,
   OTR: 99,
+  FXM: 99,
   BAL: 100,
 };
 
@@ -739,6 +741,20 @@ export function calculateCashBalancesMulti(
     // cash moved. See tests/financial/current-behaviour.cash.spec.ts "OTR
     // SPEC" for the worked examples this fixes.
     if (t === 'OTR') {
+      if (tx.cash_value != null) {
+        const ccy = ((tx.cash_ccy || 'GBP').toUpperCase()) as Ccy;
+        cash[ccy] += Number(tx.cash_value) || 0;
+      }
+      continue;
+    }
+
+    // FXM (Foreign Exchange Movement): a realised gain/loss on the portfolio's
+    // base-currency cash value, already expressed and signed in cash_ccy (the
+    // portfolio base currency). Like OTR/BAL, cash_value carries both sign and
+    // magnitude and is added as-is, unconditionally — never gated by
+    // isCashAsset/requireCashAsset, and never derived from quantity/price
+    // (those have no economic meaning for FXM; see TRANSACTION_TYPE_META).
+    if (t === 'FXM') {
       if (tx.cash_value != null) {
         const ccy = ((tx.cash_ccy || 'GBP').toUpperCase()) as Ccy;
         cash[ccy] += Number(tx.cash_value) || 0;

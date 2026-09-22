@@ -4,7 +4,7 @@ import { parse } from 'csv-parse/sync';
 import { z } from 'zod';
 import { DateTime } from 'luxon';
 import { createClient } from '@supabase/supabase-js';
-import { resolveRowCashLeg, shouldApplyCashLegGate } from '@/lib/cashLeg';
+import { resolveRowCashLeg, shouldApplyCashLegGate, resolveUngatedCashValue } from '@/lib/cashLeg';
 import { findUnresolvedTickerRows } from '@/lib/unresolvedTickers';
 import { splitTickersForLookup } from '@/lib/newTickerLookupCap';
 import {
@@ -110,9 +110,10 @@ const VALID_INPUT_TYPES = [
   'otr', 'other',
   'tran', 'transfer', 'transfer_in', 'transfer_out', 'tin', 'tot',
   'spl', 'split',
+  'fxm',
 ] as const;
 
-type CanonicalType = 'BUY' | 'SELL' | 'DIV' | 'INT' | 'DEP' | 'WIT' | 'FEE' | 'OTR' | 'TIN' | 'TOT' | 'SPL';
+type CanonicalType = 'BUY' | 'SELL' | 'DIV' | 'INT' | 'DEP' | 'WIT' | 'FEE' | 'OTR' | 'TIN' | 'TOT' | 'SPL' | 'FXM';
 
 function canonicalizeType(raw: string): CanonicalType | 'TRANSFER_GENERIC' {
   const t = (raw || '').toString().trim().toLowerCase();
@@ -127,6 +128,7 @@ function canonicalizeType(raw: string): CanonicalType | 'TRANSFER_GENERIC' {
   if (t === 'tin' || t === 'transfer_in') return 'TIN';
   if (t === 'tot' || t === 'transfer_out') return 'TOT';
   if (t === 'spl' || t === 'split') return 'SPL';
+  if (t === 'fxm') return 'FXM';
   if (t === 'tran' || t === 'transfer') return 'TRANSFER_GENERIC';
   return 'OTR';
 }
@@ -748,17 +750,25 @@ export async function POST(req: NextRequest) {
         cash_ccy = cashLeg.cash_ccy;
         cash_fx_to_portfolio = cashLeg.cash_fx_to_portfolio;
       } else {
-        // TIN/TOT for an ordinary (non-cash-ticker) security: an in-kind
-        // transfer whose cash_value/cash_ccy are never consulted by any
-        // downstream calculation — cost is booked from settle_value instead
-        // (see queries.ts's applyTransactionToHolding and
-        // transferCostBasis.ts). Deliberately NOT run through the cash-leg
-        // FX gate above: doing so would silently drop a legitimate transfer
-        // (units and settle-side cost included) whenever no FX info exists
-        // for an amount nothing ever reads. Formula unchanged from before
-        // this fix.
+        // Rows not gated above: TIN/TOT for an ordinary (non-cash-ticker)
+        // security, and FXM.
+        //
+        // TIN/TOT here is an in-kind transfer whose cash_value/cash_ccy are
+        // never consulted by any downstream calculation — cost is booked
+        // from settle_value instead (see queries.ts's
+        // applyTransactionToHolding and transferCostBasis.ts). Deliberately
+        // NOT run through the cash-leg FX gate above: doing so would
+        // silently drop a legitimate transfer (units and settle-side cost
+        // included) whenever no FX info exists for an amount nothing ever
+        // reads. Formula unchanged from before this fix.
+        //
+        // FXM's cash_value IS the final, signed, portfolio-base-currency
+        // amount already — resolveUngatedCashValue passes it through
+        // unchanged (no Math.abs, no FX conversion, no blocking). See
+        // src/lib/cashLeg.ts's CASH_LEG_TRANSACTION_TYPES comment for why
+        // FXM must never go through the gated branch above instead.
         const cashFromCsv = raw.cash_value == null ? null : Number(raw.cash_value);
-        cash_value = cashFromCsv != null ? cashFromCsv : (quantity * price + fee);
+        cash_value = resolveUngatedCashValue(cashFromCsv, quantity, price, fee);
         cash_ccy = portfolioMeta.currency ?? null;
         cash_fx_to_portfolio = fxrate;
       }
