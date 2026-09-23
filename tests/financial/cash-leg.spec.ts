@@ -623,3 +623,187 @@ describe('FXM: unchanged by this fix — resolveUngatedCashValue path, never res
     expect(shouldApplyCashLegGate('FXM', false)).toBe(false);
   });
 });
+
+// -----------------------------------------------------------------------------
+// SECOND PHASE (2026-09-23): the same-currency shortcut also overrode a
+// signed explicit cash_value, exactly like the cross-currency bug the first
+// phase fixed — just gated on currency EQUALITY instead of inequality. Real
+// DEV evidence: 2022-05-03 CASH.GBP OTR, source cash_value -0.02, stored as
+// +0.02 during the controlled IBKR rebuild's 2022 import. Root cause:
+// resolveCashLeg's same-currency branch ran BEFORE the allowSignedExplicitCash
+// branch and returned Math.abs(settleAbs) unconditionally. Fix: a new branch
+// 0 checks allowSignedExplicitCash + a finite explicit value FIRST, before
+// the same-currency shortcut — so a signed explicit cash-impact value is now
+// authoritative regardless of the currency relationship, while BUY/SELL and
+// CASH.* TIN/TOT (which never set allowSignedExplicitCash) still hit the
+// same-currency shortcut first, completely unchanged.
+// -----------------------------------------------------------------------------
+describe('Same-currency explicit-cash-value fix (2026-09-23, second phase)', () => {
+  it('1. the real discovered row: same-currency CASH.GBP OTR, explicit cash_value=-0.02, remains exactly -0.02', () => {
+    const outcome = resolveCashLeg({
+      assetCcy: 'GBP',
+      baseCcy: 'GBP',
+      settleAbs: 0.02,
+      explicitCashValue: -0.02,
+      allowSignedExplicitCash: true,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(-0.02);
+    expect(outcome.source).toBe('explicit-cash-value');
+  });
+
+  it('2. same-currency CASH.GBP OTR positive explicit value remains positive (the paired 2022-05-03 +0.02 row)', () => {
+    const outcome = resolveCashLeg({
+      assetCcy: 'GBP',
+      baseCcy: 'GBP',
+      settleAbs: 0.02,
+      explicitCashValue: 0.02,
+      allowSignedExplicitCash: true,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(0.02);
+    expect(outcome.source).toBe('explicit-cash-value');
+  });
+
+  it('3. same-currency explicit cash_value=0 remains exactly zero, not treated as absent', () => {
+    const outcome = resolveCashLeg({
+      assetCcy: 'GBP',
+      baseCcy: 'GBP',
+      settleAbs: 10,
+      explicitCashValue: 0,
+      allowSignedExplicitCash: true,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(0);
+    expect(outcome.source).toBe('explicit-cash-value');
+  });
+
+  it('4. same-currency negative FEE remains negative', () => {
+    const outcome = resolveCashLeg({
+      assetCcy: 'GBP',
+      baseCcy: 'GBP',
+      settleAbs: 3,
+      explicitCashValue: -3,
+      allowSignedExplicitCash: true,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(-3);
+  });
+
+  it('5. same-currency negative WIT remains negative', () => {
+    const outcome = resolveCashLeg({
+      assetCcy: 'GBP',
+      baseCcy: 'GBP',
+      settleAbs: 250,
+      explicitCashValue: -250,
+      allowSignedExplicitCash: true,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(-250);
+  });
+
+  it('6. same-currency DIV/INT signed explicit values are preserved (positive DIV, negative-adjustment INT)', () => {
+    const div = resolveCashLeg({
+      assetCcy: 'GBP', baseCcy: 'GBP', settleAbs: 12.5, explicitCashValue: 12.5, allowSignedExplicitCash: true,
+    });
+    expect(div.status).toBe('ok');
+    if (div.status === 'ok') expect(div.cash_value).toBe(12.5);
+
+    const int = resolveCashLeg({
+      assetCcy: 'GBP', baseCcy: 'GBP', settleAbs: 0.5, explicitCashValue: -0.5, allowSignedExplicitCash: true,
+    });
+    expect(int.status).toBe('ok');
+    if (int.status === 'ok') expect(int.cash_value).toBe(-0.5);
+  });
+
+  it('7. the already-fixed cross-currency OTLY-style negative OTR remains negative (no regression from reordering)', () => {
+    const outcome = resolveCashLeg({
+      assetCcy: 'USD',
+      baseCcy: 'GBP',
+      settleAbs: 9.16894,
+      explicitCashValue: -9.16894,
+      allowSignedExplicitCash: true,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(-9.16894);
+    expect(outcome.source).toBe('explicit-cash-value');
+  });
+
+  it('8. same-currency BUY/SELL behaviour is unchanged: a same-currency BUY call shape still hits the same-currency shortcut, ignoring any explicit cash_value', () => {
+    // BUY/SELL never set allowSignedExplicitCash, so branch 0 is a no-op and
+    // the same-currency shortcut runs first, exactly as before this fix —
+    // even if an explicit cash_value happens to be present on the row.
+    const outcome = resolveCashLeg({
+      assetCcy: 'GBP',
+      baseCcy: 'GBP',
+      settleAbs: 100,
+      explicitCashValue: 999, // must be ignored: same-currency shortcut wins for BUY/SELL
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(100);
+    expect(outcome.source).toBe('same-currency');
+  });
+
+  it('9. same-currency CASH.GBP TIN/TOT behaviour is unchanged: magnitude only, negative explicit value still forced positive', () => {
+    // Mirrors the existing suite's TIN/TOT test above — re-asserted here
+    // specifically to prove branch 0's insertion didn't change this.
+    const outcome = resolveRowCashLeg('GBP', 'GBP', 5000, -5000, null, undefined);
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(5000);
+    expect(outcome.source).toBe('same-currency');
+  });
+
+  it('10. FXM remains unchanged: still never reaches resolveCashLeg at all', () => {
+    expect(shouldApplyCashLegGate('FXM', true)).toBe(false);
+    expect(resolveUngatedCashValue(-8.083393, 1, -8.083393, 0)).toBe(-8.083393);
+  });
+
+  it('11. existing eToro (SAP.DE/CAKE) cross-currency protections remain unchanged', () => {
+    // SAP.DE-style: cross-currency, no explicit cash value, no FX rate, no
+    // cached rate -> still blocks exactly as before (nothing about branch 0
+    // changes this, since explicitCashValue is absent here).
+    const blocked = resolveCashLeg({
+      assetCcy: 'EUR',
+      baseCcy: 'GBP',
+      settleAbs: 500,
+      allowSignedExplicitCash: true,
+    });
+    expect(blocked.status).toBe('blocked');
+  });
+
+  it('12. fallback behaviour with NO explicit cash_value is unchanged (cross-currency, falls through to cached FX rate)', () => {
+    const outcome = resolveCashLeg({
+      assetCcy: 'USD',
+      baseCcy: 'GBP',
+      settleAbs: 100,
+      allowSignedExplicitCash: true,
+      cachedRateAssetToBase: 0.79,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBeCloseTo(79, 6);
+    expect(outcome.source).toBe('cached-fx-rate');
+  });
+
+  it('route-level reproduction: the actual discovered row (CASH.GBP, OTR, cash_value=-0.02, GBP-base portfolio) via resolveRowCashLeg + the real CASH_LEG_TRANSACTION_TYPES-derived flag, exactly as route.ts computes it', () => {
+    // Mirrors route.ts precisely: allowSignedExplicitCash is derived from
+    // CASH_LEG_TRANSACTION_TYPES.has(type), not hardcoded true/false.
+    const type = 'OTR';
+    const allowSignedExplicitCash = CASH_LEG_TRANSACTION_TYPES.has(type);
+    expect(allowSignedExplicitCash).toBe(true);
+
+    const outcome = resolveRowCashLeg('GBP', 'GBP', 0.02, -0.02, null, undefined, allowSignedExplicitCash);
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(-0.02);
+    expect(outcome.cash_ccy).toBe('GBP');
+  });
+});

@@ -90,22 +90,47 @@ export function resolveCashLeg(input: ResolveCashLegInput): CashLegOutcome {
     return { status: 'blocked', reason: 'No settlement amount to derive a cash leg from.' };
   }
 
-  // Same currency: no FX involved at all. Preserve current behaviour exactly.
+  // 0. A signed explicit cash movement (allowSignedExplicitCash — DIV/INT/
+  //    DEP/WIT/FEE/OTR) is authoritative regardless of the currency
+  //    relationship, and must be checked BEFORE the same-currency shortcut
+  //    below. This is the second half of the explicit-cash-value fix: the
+  //    cross-currency case (commit 2d03e36) was fixed by relaxing this
+  //    check's positivity requirement, but the same-currency shortcut still
+  //    ran first and unconditionally returned Math.abs(settleAbs) whenever
+  //    assetCcy === baseCcy — silently flipping a negative CASH.GBP-ticker
+  //    OTR/DIV/etc. (e.g. a -0.02 GBP fee) to positive, exactly like the
+  //    original cross-currency bug, just gated on currency equality instead
+  //    of inequality. See the 2022-05-03 CASH.GBP OTR investigation (source
+  //    cash_value -0.02, stored +0.02) for the real DEV evidence. BUY/SELL
+  //    and CASH.* TIN/TOT never set allowSignedExplicitCash, so this branch
+  //    is a no-op for them and the same-currency shortcut below still runs
+  //    first for those exactly as before — nothing about their behaviour
+  //    changes, currency relationship or not.
+  if (input.allowSignedExplicitCash && isFiniteNumber(input.explicitCashValue)) {
+    const cashValue = input.explicitCashValue;
+    return {
+      status: 'ok',
+      cash_value: cashValue,
+      cash_ccy: baseCcy,
+      cash_fx_to_portfolio: input.settleAbs !== 0 ? cashValue / input.settleAbs : 1,
+      source: 'explicit-cash-value',
+    };
+  }
+
+  // Same currency: no FX involved at all. Preserve current behaviour exactly
+  // for every case NOT already handled above (BUY/SELL, CASH.* TIN/TOT, and
+  // any cash-impact row with no usable explicit value at all).
   if (assetCcy === baseCcy) {
     return { status: 'ok', cash_value: input.settleAbs, cash_ccy: baseCcy, cash_fx_to_portfolio: 1, source: 'same-currency' };
   }
 
   // 1. An explicit base-currency cash amount was supplied — trust it as-is.
-  //    Cash-impact types (allowSignedExplicitCash) trust ANY finite value,
-  //    sign and zero included, exactly as supplied — never re-signed or
-  //    dropped just because the asset settles in a different currency.
-  //    BUY/SELL and CASH.* TIN/TOT (allowSignedExplicitCash unset) keep the
-  //    original, strictly-positive-only behaviour unchanged.
-  const explicitCashUsable = input.allowSignedExplicitCash
-    ? isFiniteNumber(input.explicitCashValue)
-    : isPositiveFinite(input.explicitCashValue);
-  if (explicitCashUsable) {
-    const cashValue = input.explicitCashValue as number;
+  //    Only the strictly-positive-only path remains here: the signed case
+  //    (allowSignedExplicitCash) is now fully handled by branch 0 above, so
+  //    this is BUY/SELL/TIN-TOT's original, unchanged, positive-only rule —
+  //    no ternary/type-specific branching needed here any more.
+  if (isPositiveFinite(input.explicitCashValue)) {
+    const cashValue = input.explicitCashValue;
     return {
       status: 'ok',
       cash_value: cashValue,
