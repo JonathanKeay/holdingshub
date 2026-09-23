@@ -117,18 +117,30 @@ export function resolveCashLeg(input: ResolveCashLegInput): CashLegOutcome {
     };
   }
 
-  // Same currency: no FX involved at all. Preserve current behaviour exactly
-  // for every case NOT already handled above (BUY/SELL, CASH.* TIN/TOT, and
-  // any cash-impact row with no usable explicit value at all).
-  if (assetCcy === baseCcy) {
-    return { status: 'ok', cash_value: input.settleAbs, cash_ccy: baseCcy, cash_fx_to_portfolio: 1, source: 'same-currency' };
-  }
-
   // 1. An explicit base-currency cash amount was supplied — trust it as-is.
   //    Only the strictly-positive-only path remains here: the signed case
-  //    (allowSignedExplicitCash) is now fully handled by branch 0 above, so
-  //    this is BUY/SELL/TIN-TOT's original, unchanged, positive-only rule —
-  //    no ternary/type-specific branching needed here any more.
+  //    (allowSignedExplicitCash) is fully handled by branch 0 above, so this
+  //    is BUY/SELL/TIN-TOT's rule — no ternary/type-specific branching here.
+  //
+  //    THIRD FIX (this version): this branch now runs BEFORE the
+  //    same-currency shortcut below, for the same reason branch 0 does —
+  //    cash_value is the authoritative portfolio cash movement; settle_value
+  //    (quantity*price+fee) is a separate settlement-side approximation that
+  //    must never silently override an already-correct imported cash amount
+  //    merely because the asset happens to settle in the portfolio's own
+  //    base currency. Concretely: quantity*price+fee is only correct for a
+  //    BUY (commission adds to cost); for a SELL, the true net proceeds are
+  //    quantity*price-fee (commission is deducted), so the same-currency
+  //    shortcut's unconditional use of settleAbs silently overstated every
+  //    same-currency SELL's cash_value by exactly 2x its commission — e.g.
+  //    real DEV evidence, a 2024 UKW SELL: source cash_value 122.00, fee
+  //    3.00, previously stored as 128.00 (a +6.00 = 2x3.00 error). BUY is
+  //    empirically unaffected by this reordering — every real same-currency
+  //    BUY row in the six-year IBKR rebuild set already has an explicit
+  //    cash_value numerically identical to settleAbs (confirmed by direct
+  //    calculation against both real same-currency BUY rows found), so BUY
+  //    resolves to the exact same number either way; only SELL's (and any
+  //    future type's) actual value changes, and only when it was wrong.
   if (isPositiveFinite(input.explicitCashValue)) {
     const cashValue = input.explicitCashValue;
     return {
@@ -138,6 +150,14 @@ export function resolveCashLeg(input: ResolveCashLegInput): CashLegOutcome {
       cash_fx_to_portfolio: cashValue / input.settleAbs,
       source: 'explicit-cash-value',
     };
+  }
+
+  // Same currency: no FX involved at all. Now a true LAST-RESORT fallback —
+  // reached only when neither explicit-value branch above produced a usable
+  // amount (e.g. no cash_value was supplied on the CSV row at all). Preserves
+  // exactly the prior settleAbs-based behaviour for that fallback case.
+  if (assetCcy === baseCcy) {
+    return { status: 'ok', cash_value: input.settleAbs, cash_ccy: baseCcy, cash_fx_to_portfolio: 1, source: 'same-currency' };
   }
 
   // 2. An explicit FX rate was supplied — derive the base amount from it.
