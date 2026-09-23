@@ -392,11 +392,16 @@ describe('5. transfers read failure is never silently treated as "no transfers e
     const resolvedDest = resolvedResult.find((p: any) => p.portfolio.id === DEST_PORTFOLIO_ID)!;
 
     // POLB.L is still open (never reduced after its TIN), so total_cost is a
-    // direct, present-day comparison: exactly today's £0 vs £1,547.78.
+    // direct, present-day comparison: exactly today's £0 vs £1,546.78.
+    // £1,546.78 is the provisional legacy/no-transfer valuation derived
+    // straight from the genuine broker-sourced TIN row (settle_value =
+    // 48337 * 0.031999917 + £0 fee) when no resolved transfer exists to
+    // supply a real historical cost. The resolved path instead uses the
+    // verified transfer's frozen £0 historical cost basis.
     const polbLegacy = legacyDest.holdings.find((h: any) => h.ticker === POLB_TICKER)!;
     const polbResolved = resolvedDest.holdings.find((h: any) => h.ticker === POLB_TICKER)!;
     expect(polbResolved.total_cost).toBe(0);
-    expect(polbLegacy.total_cost).toBeCloseTo(1547.78, 1);
+    expect(polbLegacy.total_cost).toBeCloseTo(1546.78, 1);
 
     // PLTR/PYPL were both later fully closed and reopened (see Group 2's
     // comment) — the resolved-vs-legacy difference shows up in cumulative
