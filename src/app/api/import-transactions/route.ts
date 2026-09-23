@@ -4,7 +4,7 @@ import { parse } from 'csv-parse/sync';
 import { z } from 'zod';
 import { DateTime } from 'luxon';
 import { createClient } from '@supabase/supabase-js';
-import { resolveRowCashLeg, shouldApplyCashLegGate, resolveUngatedCashValue } from '@/lib/cashLeg';
+import { resolveRowCashLeg, shouldApplyCashLegGate, resolveUngatedCashValue, CASH_LEG_TRANSACTION_TYPES } from '@/lib/cashLeg';
 import { findUnresolvedTickerRows } from '@/lib/unresolvedTickers';
 import { splitTickersForLookup } from '@/lib/newTickerLookupCap';
 import {
@@ -726,13 +726,20 @@ export async function POST(req: NextRequest) {
         // TIN/TOT by the SAP.DE DIV / ETRO DEP investigation — those are
         // genuine cash movements with exactly the same FX risk.
         const explicitCashValue = raw.cash_value == null ? null : Number(raw.cash_value);
+        // DIV/INT/DEP/WIT/FEE/OTR are genuine cash-impact types: an explicit
+        // cash_value's sign (a charge, a refund, or exactly 0) must be
+        // trusted as-is, regardless of the asset's settlement currency. BUY
+        // /SELL (also gated above) must NOT get this — their cash_value is
+        // always a magnitude, direction comes from type/quantity alone.
+        const allowSignedExplicitCash = CASH_LEG_TRANSACTION_TYPES.has(type);
         const cashLeg = resolveRowCashLeg(
           assetMeta.currency,
           portfolioMeta.currency,
           Math.abs(settle_value),
           explicitCashValue,
           fxrate,
-          fxQuotesByDate[raw.date_time]
+          fxQuotesByDate[raw.date_time],
+          allowSignedExplicitCash
         );
 
         if (cashLeg.status === 'blocked') {

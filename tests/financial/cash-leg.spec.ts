@@ -16,6 +16,7 @@ import {
   resolveRowCashLeg,
   shouldApplyCashLegGate,
   resolveUngatedCashValue,
+  CASH_LEG_TRANSACTION_TYPES,
 } from '../../src/lib/cashLeg';
 
 describe('resolveCashLeg — GBP asset in a GBP portfolio (same currency)', () => {
@@ -400,5 +401,225 @@ describe('resolveUngatedCashValue — FXM row construction: sign and precision m
 
   it('an explicit zero is trusted as zero, not treated as "missing"', () => {
     expect(resolveUngatedCashValue(0, 100, 100, 0)).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// allowSignedExplicitCash — the foreign-currency negative-explicit-cash-value
+// fix. Context: a real 2026 IBKR TRD WYNN withholding-tax OTR row had source
+// cash_value = -1.3890004 GBP, but the imported DB transaction stored
+// +1.3890004 GBP — because resolveCashLeg's explicit-cash-value branch used
+// isPositiveFinite (n > 0), so a negative explicit value fell through to the
+// FX-rate branch, which always produces Math.abs(settleAbs) * rate, a
+// positive magnitude. DIV/INT/DEP/WIT/FEE/OTR are genuine cash-impact types
+// whose cash_value IS the actual signed movement (a charge is negative, a
+// refund/credit is positive) — the asset's own settlement currency must
+// never determine that sign. BUY/SELL and CASH.* TIN/TOT must NOT get this
+// treatment: their cash_value is always a magnitude (direction comes from
+// type/quantity alone), so allowSignedExplicitCash must stay unset/false for
+// them — see the "unchanged" describe blocks below, which prove exactly that.
+// ---------------------------------------------------------------------------
+
+describe('resolveCashLeg — allowSignedExplicitCash: negative/zero explicit cash values on a foreign-currency cash-impact row', () => {
+  it('OTR: explicit -1.2470624 GBP on a USD asset is preserved exactly, not flipped positive (the real OTLY ADR-fee row)', () => {
+    const outcome = resolveCashLeg({
+      assetCcy: 'USD',
+      baseCcy: 'GBP',
+      settleAbs: 1.2470624,
+      explicitCashValue: -1.2470624,
+      allowSignedExplicitCash: true,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(-1.2470624);
+    expect(outcome.cash_ccy).toBe('GBP');
+    expect(outcome.source).toBe('explicit-cash-value');
+  });
+
+  it('OTR: explicit +1.2470624 GBP on a USD asset is preserved exactly (the reversal leg of the same real event)', () => {
+    const outcome = resolveCashLeg({
+      assetCcy: 'USD',
+      baseCcy: 'GBP',
+      settleAbs: 1.2470624,
+      explicitCashValue: 1.2470624,
+      allowSignedExplicitCash: true,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(1.2470624);
+    expect(outcome.source).toBe('explicit-cash-value');
+  });
+
+  it('the real WYNN 2026 withholding-tax row: -1.3890004 GBP must survive, not become +1.3890004', () => {
+    const outcome = resolveCashLeg({
+      assetCcy: 'USD',
+      baseCcy: 'GBP',
+      settleAbs: 1.3890004,
+      explicitCashValue: -1.3890004,
+      allowSignedExplicitCash: true,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(-1.3890004);
+  });
+
+  it('WIT: explicit negative value preserves its sign', () => {
+    const outcome = resolveCashLeg({
+      assetCcy: 'USD',
+      baseCcy: 'GBP',
+      settleAbs: 42,
+      explicitCashValue: -33.5,
+      allowSignedExplicitCash: true,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(-33.5);
+  });
+
+  it('FEE: explicit negative value preserves its sign', () => {
+    const outcome = resolveCashLeg({
+      assetCcy: 'EUR',
+      baseCcy: 'GBP',
+      settleAbs: 4.2,
+      explicitCashValue: -3.99,
+      allowSignedExplicitCash: true,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(-3.99);
+  });
+
+  it('DIV: an explicit signed value is preserved appropriately (a positive dividend, foreign-currency asset)', () => {
+    const outcome = resolveCashLeg({
+      assetCcy: 'USD',
+      baseCcy: 'GBP',
+      settleAbs: 12.5,
+      explicitCashValue: 9.87,
+      allowSignedExplicitCash: true,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(9.87);
+  });
+
+  it('INT: an explicit signed value is preserved appropriately (a negative interest adjustment, foreign-currency asset)', () => {
+    const outcome = resolveCashLeg({
+      assetCcy: 'USD',
+      baseCcy: 'GBP',
+      settleAbs: 0.5,
+      explicitCashValue: -0.12,
+      allowSignedExplicitCash: true,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(-0.12);
+  });
+
+  it('a cross-currency asset does not cause the explicit cash_value to be converted or re-signed at all — it is returned byte-for-byte', () => {
+    // If this were wrongly falling through to the FX-rate/cached-rate branch,
+    // a rate would multiply settleAbs and the result would differ from the
+    // supplied value. It must not.
+    const outcome = resolveCashLeg({
+      assetCcy: 'JPY',
+      baseCcy: 'GBP',
+      settleAbs: 500,
+      explicitCashValue: -2.718281828,
+      explicitFxRate: 0.0055, // present but must be ignored: explicit cash wins
+      cachedRateAssetToBase: 0.006,
+      allowSignedExplicitCash: true,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(-2.718281828);
+    expect(outcome.source).toBe('explicit-cash-value');
+  });
+
+  it('explicit cash_value = 0 is trusted as exactly 0, not treated as absent / not falling through to FX fallback', () => {
+    const outcome = resolveCashLeg({
+      assetCcy: 'USD',
+      baseCcy: 'GBP',
+      settleAbs: 10,
+      explicitCashValue: 0,
+      explicitFxRate: 0.8, // must be ignored — an explicit 0 is still "supplied"
+      allowSignedExplicitCash: true,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(0);
+    expect(outcome.source).toBe('explicit-cash-value');
+  });
+
+  it('existing positive explicit cash values remain unchanged by this fix', () => {
+    const outcome = resolveCashLeg({
+      assetCcy: 'USD',
+      baseCcy: 'GBP',
+      settleAbs: 13799.5046,
+      explicitCashValue: 10047.97128,
+      allowSignedExplicitCash: true,
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBeCloseTo(10047.97128, 6);
+  });
+});
+
+describe('resolveRowCashLeg — allowSignedExplicitCash threaded through the same row-level entry point route.ts actually calls', () => {
+  it('the real WYNN OTR row shape: -1.3890004 preserved when the 7th argument (allowSignedExplicitCash) is true', () => {
+    const outcome = resolveRowCashLeg('USD', 'GBP', 1.3890004, -1.3890004, null, undefined, true);
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(-1.3890004);
+  });
+
+  it('omitting the 7th argument defaults to false — old strictly-positive-only behaviour, unchanged (a negative value blocks, exactly as before this fix existed)', () => {
+    const outcome = resolveRowCashLeg('USD', 'GBP', 1.3890004, -1.3890004, null, undefined);
+    expect(outcome.status).toBe('blocked');
+  });
+});
+
+describe('BUY/SELL: unchanged by this fix — never treated as a signed-explicit-cash-value transaction', () => {
+  it('a negative explicit cash_value on what would be a BUY/SELL call shape (allowSignedExplicitCash NOT set) still blocks, exactly as before', () => {
+    // BUY/SELL call sites in route.ts never pass allowSignedExplicitCash=true
+    // (CASH_LEG_TRANSACTION_TYPES excludes BUY/SELL) — this reproduces that
+    // exact call shape and pins that a stray negative cash_value still can't
+    // sneak through as a signed value for a trade.
+    const outcome = resolveRowCashLeg('USD', 'GBP', 13799.5046, -10047.97128, null, undefined);
+    expect(outcome.status).toBe('blocked');
+  });
+
+  it('a real positive BUY explicit cash_value (PLTR shape) is completely unaffected by this fix', () => {
+    const outcome = resolveRowCashLeg('USD', 'GBP', 13799.5046, 10047.97128, null, undefined);
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBeCloseTo(10047.97128, 6);
+    expect(outcome.source).toBe('explicit-cash-value');
+  });
+});
+
+describe('CASH.GBP TIN/TOT: unchanged by this fix — magnitude + type-direction semantics preserved', () => {
+  it('a CASH.* TIN/TOT call shape (allowSignedExplicitCash NOT set) still requires a strictly positive explicit value', () => {
+    // Mirrors route.ts: CASH.*-ticker TIN/TOT is gated (shouldApplyCashLegGate)
+    // but is NOT in CASH_LEG_TRANSACTION_TYPES, so it never gets
+    // allowSignedExplicitCash=true — confirmed here directly.
+    expect(shouldApplyCashLegGate('TIN', true)).toBe(true);
+    expect(CASH_LEG_TRANSACTION_TYPES.has('TIN')).toBe(false);
+    const outcome = resolveRowCashLeg('GBP', 'GBP', 5000, -5000, null, undefined);
+    // Same-currency branch (GBP/GBP, exactly the CASH.GBP-in-a-GBP-portfolio
+    // shape) is untouched by this fix regardless — always Math.abs(settleAbs).
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.cash_value).toBe(5000);
+    expect(outcome.source).toBe('same-currency');
+  });
+});
+
+describe('FXM: unchanged by this fix — resolveUngatedCashValue path, never resolveCashLeg', () => {
+  it('a negative FXM cash_value still survives sign-intact via resolveUngatedCashValue, untouched by allowSignedExplicitCash', () => {
+    expect(resolveUngatedCashValue(-1.2470624, 1, -1.2470624, 0)).toBe(-1.2470624);
+  });
+
+  it('FXM never reaches resolveCashLeg/resolveRowCashLeg at all (shouldApplyCashLegGate returns false for FXM, confirmed in the existing suite above)', () => {
+    expect(shouldApplyCashLegGate('FXM', true)).toBe(false);
+    expect(shouldApplyCashLegGate('FXM', false)).toBe(false);
   });
 });

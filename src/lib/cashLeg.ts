@@ -54,10 +54,29 @@ export type ResolveCashLegInput = {
   explicitFxRate?: number | null;
   /** A rate derived from the local fx_rates cache for the trade date, if available. */
   cachedRateAssetToBase?: number | null;
+  /**
+   * True for genuine cash-impact types (DIV/INT/DEP/WIT/FEE/OTR — see
+   * CASH_LEG_TRANSACTION_TYPES below) whose explicitCashValue is the actual
+   * signed cash movement, sign included. When true, an explicit value is
+   * trusted exactly as supplied — negative (a charge/tax/fee) or zero, not
+   * only strictly positive. BUY/SELL and CASH.* TIN/TOT must NOT set this:
+   * their cash_value is always a magnitude (direction comes from
+   * type/quantity, never from cash_value's sign), so they keep requiring a
+   * strictly positive explicit value, exactly as before this flag existed.
+   * See the 2026 WYNN withholding-tax OTR investigation for why this exists:
+   * a source cash_value of -1.3890004 GBP was being silently flipped to
+   * +1.3890004 because it fell through to the FX-rate branch below, which
+   * always produces a positive magnitude.
+   */
+  allowSignedExplicitCash?: boolean;
 };
 
 function isPositiveFinite(n: unknown): n is number {
   return typeof n === 'number' && isFinite(n) && n > 0;
+}
+
+function isFiniteNumber(n: unknown): n is number {
+  return typeof n === 'number' && isFinite(n);
 }
 
 export function resolveCashLeg(input: ResolveCashLegInput): CashLegOutcome {
@@ -77,8 +96,16 @@ export function resolveCashLeg(input: ResolveCashLegInput): CashLegOutcome {
   }
 
   // 1. An explicit base-currency cash amount was supplied — trust it as-is.
-  if (isPositiveFinite(input.explicitCashValue)) {
-    const cashValue = input.explicitCashValue;
+  //    Cash-impact types (allowSignedExplicitCash) trust ANY finite value,
+  //    sign and zero included, exactly as supplied — never re-signed or
+  //    dropped just because the asset settles in a different currency.
+  //    BUY/SELL and CASH.* TIN/TOT (allowSignedExplicitCash unset) keep the
+  //    original, strictly-positive-only behaviour unchanged.
+  const explicitCashUsable = input.allowSignedExplicitCash
+    ? isFiniteNumber(input.explicitCashValue)
+    : isPositiveFinite(input.explicitCashValue);
+  if (explicitCashUsable) {
+    const cashValue = input.explicitCashValue as number;
     return {
       status: 'ok',
       cash_value: cashValue,
@@ -215,7 +242,8 @@ export function resolveRowCashLeg(
   settleAbs: number,
   explicitCashValue: number | null,
   explicitFxRate: number | null,
-  quotesForDate: Record<string, number> | undefined
+  quotesForDate: Record<string, number> | undefined,
+  allowSignedExplicitCash: boolean = false
 ): CashLegOutcome {
   // Only attempt the cache when there's no USABLE explicit rate — a CSV
   // fxrate of 0 (this fix's whole trigger case: the eToro CAKE/SAP.DE rows)
@@ -236,6 +264,7 @@ export function resolveRowCashLeg(
     explicitCashValue,
     explicitFxRate,
     cachedRateAssetToBase,
+    allowSignedExplicitCash,
   });
 }
 
