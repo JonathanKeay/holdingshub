@@ -23,7 +23,6 @@ function useDebouncedEffect(effect: () => void, deps: any[], delay: number) {
 }
 
 export default function CashBalanceToolClient({ portfolios }: { portfolios: Portfolio[] }) {
-  const [localState, setState] = React.useState(initial);
   const [state, formAction] = useActionState(processBalanceAction, initial);
   const pathname = usePathname();
 
@@ -66,7 +65,6 @@ export default function CashBalanceToolClient({ portfolios }: { portfolios: Port
         });
         if (parsed.portfolio_id) {
           setSelectedPortfolioId(parsed.portfolio_id);
-          const foundName = portfolios.find((p) => p.id === parsed.portfolio_id)?.name || '';
         }
       }
     } catch {}

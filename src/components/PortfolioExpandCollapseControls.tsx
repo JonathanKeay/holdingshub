@@ -1,7 +1,5 @@
 "use client";
 
-import React from 'react';
-
 export default function PortfolioExpandCollapseControls() {
   const broadcast = (type: 'expand' | 'collapse') => {
     const evt = new CustomEvent(type === 'expand' ? 'portfolio:expandAll' : 'portfolio:collapseAll');

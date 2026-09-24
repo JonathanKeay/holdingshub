@@ -19,7 +19,7 @@ export async function fetchExchangeRatesToGBP(): Promise<Record<string, number>>
   const today = new Date().toISOString().slice(0, 10);
 
   // 1. Try cache first
-  const { data: cached, error } = await supabase
+  const { data: cached } = await supabase
     .from('fx_rates')
     .select('quotes')
     .eq('date', today)

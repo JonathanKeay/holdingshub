@@ -2,16 +2,10 @@
 
 import { useState, useRef } from 'react';
 import {
-  POSITIVE_BADGE,
-  NEGATIVE_BADGE,
-  POSITIVE_TEXT,
-  NEGATIVE_TEXT,
   THEME_BLUE_TEXT,
-  THEME_BLUE_BADGE,
   THEME_BLUE_DISABLED,
   THEME_BLUE_ACTIVE,
   THEME_BLUE_CHECKED,
-  THEME_BLUE_DISABLED_BG,
 } from '../../lib/uiColors';
 import { ISO_CURRENCY_CODES } from '../../lib/manualAssetMetadata';
 import { withCurrencySelected } from '../../lib/importConfirmSelection';

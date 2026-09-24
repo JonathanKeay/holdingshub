@@ -19,7 +19,7 @@ function LoginPageInner() {
     setLoading(true);
     setErr(null);
     try {
-      const { data, error } = await supabaseBrowser.auth.signInWithPassword({
+      const { error } = await supabaseBrowser.auth.signInWithPassword({
         email,
         password,
       });

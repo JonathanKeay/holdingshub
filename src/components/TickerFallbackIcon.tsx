@@ -1,5 +1,3 @@
-import React from "react";
-
 export function TickerFallbackIcon({ ticker }: { ticker: string }) {
   const letters = (ticker || "").toUpperCase().slice(0, 3);
   return (
