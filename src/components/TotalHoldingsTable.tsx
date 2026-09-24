@@ -218,11 +218,12 @@ export function TotalHoldingsTable({
   });
 
 
-  // Definition B (dormant): each *_Incomplete flag becomes true only if some
-  // holding opted in (base_currency set) but could not produce a reliable
-  // base figure — never triggered today, since no live caller sets
-  // base_currency yet. A holding that never opted in falls straight through
-  // to the existing legacy native×spot-FX calculation, unchanged.
+  // Definition B: each *_Incomplete flag becomes true only if some holding
+  // opted in (base_currency set) but could not produce a reliable base
+  // figure. In this Global view a holding opts in only when its contributing
+  // portfolios share one base currency; a holding that has not opted in
+  // falls straight through to the existing legacy native×spot-FX
+  // calculation, unchanged.
   let totalCostIncomplete = false;
   const totalCostAllGBP = sortedHoldings.reduce((sum, h) => {
     const rate = fxRateForCurrency(h.currency);

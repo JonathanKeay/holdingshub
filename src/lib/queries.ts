@@ -43,7 +43,7 @@ export type Holding = {
                                  // did not (display as such — never silently pick one); undefined
                                  // means no realised-affecting activity exists for this ticker at all.
                                  // This is plain display-domain metadata — NOT Holding.base_currency —
-                                 // and reading/writing it never touches the dormant Definition B block.
+                                 // and reading/writing it never touches the Definition B ledger.
 
   // ---- Definition B: parallel portfolio-base weighted-average cost ledger ----
   // All fields below are OPTIONAL and additive: a Holding that never sets
@@ -414,17 +414,18 @@ export function applyTransactionToHolding(holding: Holding, txn: Txn) {
   // Cost is sourced ONLY from cash_value/cash_ccy (the portfolio-base cash
   // actually paid/received — see src/lib/cashLeg.ts), never retranslated
   // from the native ledger using a sale-date or any other FX rate. Where
-  // asset currency == base currency, cash_value already equals settle_value
-  // (see the DB's mirror_settle_to_cash trigger and cashLeg.ts's
-  // same-currency branch), so no separate no-FX code path is needed here —
-  // the same formula naturally requires zero FX.
+  // asset currency == base currency, cash_value is already a base-currency
+  // amount (an explicit value, or cashLeg.ts's same-currency fallback / the
+  // DB's mirror_settle_to_cash trigger), so no separate no-FX code path is
+  // needed here — the same formula naturally requires zero FX.
   //
-  // TIN/TOT: no linked-transfer persistence layer exists yet (see the
-  // transfer pending/matching design), so a TIN/TOT's cash_value cannot yet
-  // be trusted as a real carried-forward base cost. Rather than guess, the
-  // holding's base ledger is marked unreliable from that point on. Once a
-  // confirmed link exists, this is exactly what CostParcel.baseCost/baseCcy
-  // (src/lib/transferCostBasis.ts) is for.
+  // TIN/TOT: this function never trusts a TIN/TOT's cash_value as a
+  // carried-forward base cost, so the holding's base ledger is marked
+  // unreliable from that point on. This is the legacy fallback for an
+  // UNRESOLVED transfer. A resolved transfer (matched/external_in/
+  // external_out) is handled by applyTransactionToHoldingResolvingTransfers
+  // below, using the frozen CostParcel.baseCost/baseCcy
+  // (src/lib/transferCostBasis.ts).
   // -----------------------------------------------------------------------
   if (holding.base_currency) {
     const baseCcy = holding.base_currency.toUpperCase();
@@ -503,12 +504,16 @@ export function applyTransactionToHolding(holding: Holding, txn: Txn) {
 // above is completely unmodified). For a TIN with a resolved (matched or
 // external_in) transfer record, applies the frozen CostParcel via
 // applyTransferIn instead of applyTransactionToHolding's legacy transfer-
-// date/notional derivation. Every other transaction — including every TOT,
-// every pending_in/unlinked TIN, and everything else — falls straight
-// through to the unchanged applyTransactionToHolding. See
+// date/notional derivation. For a TOT with a resolved (matched or
+// external_out) record, applyTransactionToHolding still runs as normal and
+// its Definition B taint is then corrected from the frozen parcel's
+// baseCost (see the block comment inside the function). Every other
+// transaction — every pending/unlinked TIN/TOT and everything else — falls
+// straight through to the unchanged applyTransactionToHolding. See
 // src/lib/holdingsTransferIntegration.ts for the pure lookup/parcel-
 // resolution helpers this uses; no database access happens here or there —
-// resolvedTinTransfers is built ONCE per replay by the caller.
+// resolvedTinTransfers/resolvedTotTransfers are built ONCE per replay by
+// the caller.
 // -----------------------------------------------------------------------
 export function applyTransactionToHoldingResolvingTransfers(
   holding: Holding,
@@ -949,11 +954,11 @@ export async function getAllHoldingsAndCashSummary(
     .select('id, ticker, name, currency, logo_url, status');
   if (!assets) return { holdings: [], cash_balances: [] };
 
-  // Needed ONLY to determine which portfolio-base currency each
-  // transaction's realised contribution is actually denominated in (see
-  // Holding.realised_ccy below) — this is plain display-domain metadata,
-  // not Holding.base_currency, and does not touch or activate the dormant
-  // Definition B ledger in any way.
+  // Each portfolio's base currency, used for two separate purposes below:
+  // (1) Holding.realised_ccy — which portfolio-base currency each
+  // transaction's realised contribution is actually denominated in (plain
+  // display-domain metadata, not Holding.base_currency); and (2) the
+  // Definition B activation pre-scan (resolveDefinitionBBaseCurrencies).
   const { data: portfoliosForRealisedCcy } = await supabase
     .from('portfolios')
     .select('id, base_currency');
@@ -1025,7 +1030,7 @@ export async function getAllHoldingsAndCashSummary(
   // step — setting it retroactively after replay would leave every
   // already-processed transaction's contribution un-accumulated. A
   // genuinely mixed ticker is simply never opted in (base_currency stays
-  // unset for it), preserving today's dormant/legacy behaviour rather than
+  // unset for it), so it stays on the native-only legacy path rather than
   // guessing — re-derived from real data each call, never hard-coded to
   // specific tickers.
   const tickerDefBBaseCcy = resolveDefinitionBBaseCurrencies(
@@ -1066,8 +1071,8 @@ export async function getAllHoldingsAndCashSummary(
         // Definition B activation: only opted in when every contributing
         // portfolio's BUY/SELL/TIN/TOT activity shares one base currency
         // (see the pre-scan above). A genuinely mixed ticker is left with
-        // base_currency unset — the existing dormant/legacy path handles it
-        // exactly as it always has, never a guessed figure.
+        // base_currency unset — Definition B stays off for it (native ledger
+        // only), never a guessed figure.
         ...(tickerDefBBaseCcy[ticker] ? { base_currency: tickerDefBBaseCcy[ticker] } : {}),
       };
     }

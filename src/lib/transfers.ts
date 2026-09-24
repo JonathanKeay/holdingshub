@@ -21,9 +21,11 @@
 // Once a transfer reaches matched/external_in/external_out, it IS consulted
 // by live holdings replay: src/lib/queries.ts's
 // applyTransactionToHoldingResolvingTransfers (used by
-// getPortfoliosWithHoldingsAndCash/getAllHoldingsAndCashSummary) applies its
-// frozen cost parcel via applyTransferIn instead of the legacy
-// applyTransactionToHolding TIN/TOT branch. applyTransactionToHolding itself
+// getPortfoliosWithHoldingsAndCash/getAllHoldingsAndCashSummary) applies a
+// resolved TIN's frozen cost parcel via applyTransferIn instead of the legacy
+// applyTransactionToHolding TIN branch; for a resolved TOT it runs the legacy
+// TOT branch and then corrects Definition B from the parcel's baseCost.
+// applyTransactionToHolding itself
 // remains completely unmodified and is still the fallback for any
 // unresolved TIN/TOT.
 //

@@ -1,7 +1,8 @@
 // src/lib/holdingsTransferIntegration.ts
 //
-// Pure helpers bridging RESOLVED transfer records (transfers table, status =
-// 'matched' or 'external_in' only) into live holdings replay. No runtime
+// Pure helpers bridging RESOLVED transfer records (transfers table:
+// 'matched'/'external_in' for the TIN side, 'matched'/'external_out' for the
+// TOT side) into live holdings replay. No runtime
 // dependency on queries.ts/transferCostBasis.ts/transfers.ts — every import
 // below is `import type`, deliberately, so this module has zero runtime
 // module-graph edges (queries.ts's orchestration functions import FROM
@@ -9,8 +10,9 @@
 // applyTransactionToHolding at runtime, that would be a circular import).
 //
 // The actual dispatch wrapper that DECIDES which function to call
-// (applyTransferIn for a resolved TIN, applyTransactionToHolding for
-// everything else) lives in queries.ts itself, right next to
+// (applyTransferIn for a resolved TIN; applyTransactionToHolding for
+// everything else, followed by a Definition B correction for a resolved
+// TOT) lives in queries.ts itself, right next to
 // applyTransactionToHolding — which remains completely unmodified.
 
 import type { Holding, Txn } from './queries';
@@ -82,10 +84,10 @@ export function indexResolvedTransfersByOutTransactionId(
  * "use legacy behaviour", exactly as today).
  *
  * baseCost/baseCcy are always carried through when present on the transfer
- * record, even though Definition B is dormant today (no live Holding sets
- * base_currency) — so activating Definition B later needs no change here:
- * applyTransferIn already marks a Holding's base ledger unreliable rather
- * than inventing a figure when a resolved transfer has no base cost.
+ * record. Definition B is live for every per-portfolio holding and for a
+ * Global holding whose base currency is unambiguous; applyTransferIn marks
+ * the destination's base ledger unreliable, rather than inventing a figure,
+ * when a resolved transfer has no base cost.
  */
 export function resolveTransferParcelForTin(
   txn: Txn,

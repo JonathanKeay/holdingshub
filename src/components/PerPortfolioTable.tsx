@@ -162,9 +162,9 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
   let totalPrevValueInBase = 0;
   let totalCostInBase = 0;
   let totalProfitLossInBase = 0;
-  // Definition B (dormant): becomes true only if some holding opted in
-  // (base_currency set) but could not produce a reliable base cost — never
-  // triggered today, since no live caller sets base_currency yet.
+  // Definition B: becomes true only if some holding opted in (base_currency
+  // set) but could not produce a reliable base cost. Every per-portfolio
+  // holding opts in, so this can be triggered (e.g. by an unresolved TIN/TOT).
   let baseCostAggregateIncomplete = false;
   for (const h of sortedHoldings) {
     const price = prices[h.ticker]?.price ?? 0;
@@ -181,10 +181,9 @@ export function PerPortfolioTable({ portfolio, holdings, cashBalances, prices, f
 
     // Definition B: use the engine-provided historical base-currency cost
     // directly (see src/lib/definitionBDisplay.ts) — never native total_cost
-    // re-derived via today's spot FX rate. A holding that never opted in
-    // (base_currency unset — true for every live holding while Definition B
-    // stays dormant) falls straight through to the existing legacy
-    // calculation, unchanged.
+    // re-derived via today's spot FX rate. A holding that has not opted in
+    // (base_currency unset) falls straight through to the existing legacy
+    // calculation, unchanged; per-portfolio holdings always opt in.
     const costContribution = baseCostContribution(h, h.total_cost * fx);
     if (costContribution.incomplete) {
       baseCostAggregateIncomplete = true;

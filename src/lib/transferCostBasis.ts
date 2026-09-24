@@ -32,11 +32,15 @@
 // only ever coupled through the parcel value, never through shared object
 // state or timing.
 //
-// WIRED IN: applyTransferIn/applyTransferOut are called from
-// queries.ts's applyTransactionToHoldingResolvingTransfers, which
+// WIRED IN: applyTransferIn is called from queries.ts's
+// applyTransactionToHoldingResolvingTransfers, which
 // getPortfoliosWithHoldingsAndCash and getAllHoldingsAndCashSummary use for
 // live dashboard/mobile holdings replay whenever a resolved (matched/
-// external_in/external_out) transfer record exists for a TIN/TOT. The
+// external_in) transfer record exists for a TIN. applyTransferOut is called
+// from transfers.ts's captureTransferOut when a pending_out parcel is
+// captured at import (via transferImportIntegration.ts). A resolved TOT in
+// live replay calls neither: it runs applyTransactionToHolding and then
+// corrects Definition B from the frozen parcel's baseCost. The
 // unmodified applyTransactionToHolding()'s own TIN/TOT branches still never
 // call these — that function remains the deliberate legacy fallback for a
 // TIN/TOT with no resolved transfer. Deciding *which* real TOT/TIN rows are
@@ -54,10 +58,13 @@ export type CostParcel = {
   quantity: number;
   nativeCost: number;
   nativeCcy: string;
-  // Portfolio-base (e.g. GBP) cost carry-forward depends on the Definition B
-  // parallel base-currency ledger, which does not exist yet. These fields
-  // are reserved so the parcel shape will not need to change again once it
-  // does — today every caller leaves them undefined.
+  // Portfolio-base (e.g. GBP) cost carry-forward for the Definition B
+  // ledger. applyTransferOut sets these when the source holding has opted
+  // into Definition B (base_currency set) and its base ledger is reliable;
+  // a parcel resolved from a transfer record carries that record's
+  // base_cost/base_ccy. The import-time capture replay never sets
+  // base_currency, so parcels captured at import leave them undefined
+  // (docs/ACCOUNTING.md §15 item 13, C5).
   baseCost?: number;
   baseCcy?: string;
 };

@@ -7,8 +7,9 @@
 // Rule: prefer the engine-provided base-currency field directly (never
 // native × current-spot-FX) when the holding opted into Definition B
 // (base_currency set) and the corresponding reliability flag is true. A
-// holding that never opted in (base_currency unset — true for every live
-// holding while Definition B stays dormant) falls straight through to
+// holding that has not opted in (base_currency unset — e.g. a Global/blended
+// holding whose contributing portfolios have mixed base currencies; every
+// per-portfolio holding opts in) falls straight through to
 // whatever legacy value the caller already computed, unchanged. A holding
 // that opted in but isn't reliable contributes NOTHING (not zero) and is
 // reported as making the aggregate incomplete — the caller must never treat

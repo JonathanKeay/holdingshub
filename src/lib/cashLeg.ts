@@ -1,8 +1,10 @@
 // src/lib/cashLeg.ts
 //
-// Shared, pure decision logic for turning a BUY/SELL's native-currency
-// settlement amount into a portfolio-base-currency cash leg (cash_value /
-// cash_ccy / cash_fx_to_portfolio).
+// Shared, pure decision logic for turning a gated transaction's native-
+// currency settlement amount into a portfolio-base-currency cash leg
+// (cash_value / cash_ccy / cash_fx_to_portfolio). Originally BUY/SELL only;
+// now every type shouldApplyCashLegGate (below) accepts: BUY/SELL,
+// DIV/INT/DEP/WIT/FEE/OTR, and CASH.* TIN/TOT.
 //
 // The rule this encodes: when the asset's currency differs from the
 // portfolio's base currency, NEVER silently relabel the native settlement
@@ -18,9 +20,10 @@
 // given a fabricated 1:1 "conversion". This module makes no external network
 // calls and never invents a rate.
 //
-// Same-currency transactions (asset ccy === portfolio base ccy) are always a
-// trivial no-FX case — this module deliberately does not touch that path's
-// existing numeric behaviour.
+// Same-currency transactions (asset ccy === portfolio base ccy) need no FX.
+// An explicit cash_value is still preferred when currencies match; the
+// same-currency settlement-amount shortcut is only a last-resort fallback
+// (see the branch order in resolveCashLeg and docs/ACCOUNTING.md §2).
 
 export type CashLegSource =
   | 'same-currency'
@@ -103,9 +106,9 @@ export function resolveCashLeg(input: ResolveCashLegInput): CashLegOutcome {
   //    of inequality. See the 2022-05-03 CASH.GBP OTR investigation (source
   //    cash_value -0.02, stored +0.02) for the real DEV evidence. BUY/SELL
   //    and CASH.* TIN/TOT never set allowSignedExplicitCash, so this branch
-  //    is a no-op for them and the same-currency shortcut below still runs
-  //    first for those exactly as before — nothing about their behaviour
-  //    changes, currency relationship or not.
+  //    is a no-op for them; they are handled by branch 1 below (a strictly
+  //    positive explicit value), which since the third fix also runs before
+  //    the same-currency shortcut.
   if (input.allowSignedExplicitCash && isFiniteNumber(input.explicitCashValue)) {
     const cashValue = input.explicitCashValue;
     return {
@@ -197,8 +200,7 @@ export function resolveCashLeg(input: ResolveCashLegInput): CashLegOutcome {
  * (shape: { GBPUSD: 1.29, GBPEUR: 1.17, ... }, i.e. GBP-per-unit-foreign is
  * inverted — these keys are literally "1 GBP buys this many of X"). Pure and
  * synchronous: callers fetch the quotes row once (for one or many dates) and
- * pass it in here. Mirrors the FX-cache math that already existed, unused, in
- * the old computeCashLeg() helper in src/app/transactions/page.tsx.
+ * pass it in here.
  */
 export function deriveAssetToBaseRate(
   quotes: Record<string, number> | null | undefined,
