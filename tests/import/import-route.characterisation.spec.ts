@@ -1,0 +1,474 @@
+// IMPORT ROUTE — confirm-stage row construction: CURRENT behaviour (Phase 0 safety net)
+//
+// Characterises exactly what POST /api/import-transactions?stage=confirm passes
+// to transactions.insert() today, before its row-building logic is extracted
+// or refactored (cleanup item B9). See docs/ACCOUNTING.md §2 and §12.
+//
+// These tests describe CURRENT behaviour. Several pin known defects; those are
+// labelled "KNOWN DEFECT Cn" and cross-reference
+// tests/financial/known-defects.characterisation.spec.ts. A passing test here
+// does NOT mean the behaviour is correct or approved. An approved behavioural
+// fix must update the affected test in the same commit, citing the decision.
+//
+// Isolation:
+//   - the session and the service-role Supabase client are mocked; the client
+//     is the in-memory fake from ./importRouteHarness.ts;
+//   - processImportedTransfers is stubbed (transfer persistence is out of scope);
+//   - every network-capable dependency (yahoo-finance2, the Finnhub/logo
+//     helpers, domain enrichment, global fetch) is replaced by a stub that
+//     records and throws, and every test asserts none of them was called;
+//   - only existing tickers are used, so no asset-creation path runs.
+//
+// IMPORTANT CURRENT BEHAVIOUR (KNOWN DEFECT C15, found while writing these
+// tests): the route's schema parses cash_value and fxrate with
+// z.union([z.coerce.number(), z.literal('')]). z.coerce.number() accepts ""
+// and yields 0, so the '' -> null branch is never reached: a BLANK cash_value
+// or fxrate cell always arrives as 0, never null. Consequences pinned below:
+//   - the cached fx_rates step in resolveRowCashLeg (consulted only when
+//     cash_value is null) is unreachable through CSV import;
+//   - DIV/INT/DEP/WIT/FEE/OTR, FXM and security TIN/TOT with a blank cash_value
+//     store 0 (not a qty*price+fee fallback);
+//   - cash_fx_to_portfolio stores 0 wherever the raw CSV fxrate is copied.
+// BUY/SELL with a blank cash_value still reach the same-currency / explicit-fxrate
+// fallbacks, because 0 is not a positive explicit value.
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createImportFake, confirmRequest, toCsv, type Row } from './importRouteHarness';
+
+const h = vi.hoisted(() => ({
+  client: null as any,
+  networkCalls: [] as string[],
+}));
+
+vi.mock('@supabase/supabase-js', () => ({
+  createClient: vi.fn(() => h.client),
+}));
+
+vi.mock('@/lib/supabase-server', () => ({
+  getSupabaseServerClient: vi.fn(async () => ({
+    auth: { getSession: async () => ({ data: { session: { user: { id: 'user-1' } } } }) },
+  })),
+}));
+
+vi.mock('@/lib/transferImportIntegration', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/lib/transferImportIntegration')>();
+  return {
+    ...actual,
+    processImportedTransfers: vi.fn(async () => ({ created: [], suggestions: {}, errors: [] })),
+  };
+});
+
+vi.mock('yahoo-finance2', () => ({
+  default: {
+    quoteSummary: vi.fn(() => {
+      h.networkCalls.push('yahoo-finance2.quoteSummary');
+      throw new Error('network blocked in tests');
+    }),
+  },
+}));
+
+vi.mock('@/lib/logo', () => ({
+  fetchCompanyWeburlFromFinnhub: vi.fn(() => {
+    h.networkCalls.push('logo.fetchCompanyWeburlFromFinnhub');
+    throw new Error('network blocked in tests');
+  }),
+}));
+
+vi.mock('@/lib/newAssetDomainEnrichment', () => ({
+  enrichNewAssetDomain: vi.fn(() => {
+    h.networkCalls.push('newAssetDomainEnrichment.enrichNewAssetDomain');
+    throw new Error('network blocked in tests');
+  }),
+}));
+
+import { POST } from '../../src/app/api/import-transactions/route';
+import { processImportedTransfers } from '@/lib/transferImportIntegration';
+
+// ---------------------------------------------------------------------------
+// Reference data
+// ---------------------------------------------------------------------------
+
+const PORTFOLIOS: Row[] = [
+  { id: 'p-gbp', name: 'ISA Account', base_currency: 'GBP', user_id: 'user-1' },
+  { id: 'p-usd', name: 'US Book', base_currency: 'USD', user_id: 'user-1' },
+  { id: 'p-other-user', name: 'Someone Else', base_currency: 'GBP', user_id: 'user-2' },
+];
+
+const ASSETS: Row[] = [
+  { id: 'a-vod', ticker: 'VOD.L', currency: 'GBP', status: 'active', resolved_ticker: null },
+  { id: 'a-aapl', ticker: 'AAPL', currency: 'USD', status: 'active', resolved_ticker: null },
+  { id: 'a-cash-gbp', ticker: 'CASH.GBP', currency: 'GBP', status: 'active', resolved_ticker: null },
+  { id: 'a-cash-usd', ticker: 'CASH.USD', currency: 'USD', status: 'active', resolved_ticker: null },
+];
+
+const NO_CACHE_DATE = '2024-03-01';
+const CACHE_DATE = '2024-03-04'; // fx_rates has GBPUSD 1.25 -> USD->GBP 0.8
+const FX_RATES: Row[] = [{ date: CACHE_DATE, quotes: { GBPUSD: 1.25 } }];
+
+const BASE_TIME_MS = Date.UTC(2026, 8, 24, 12, 0, 0); // fixed "now" for created_at staggering
+
+const COLUMNS = ['portfolio', 'ticker', 'transaction_type', 'date_time', 'quantity', 'price', 'fee', 'fxrate', 'cash_value', 'notes'];
+
+type CsvRow = Partial<Record<string, string | number>>;
+
+async function importCsv(rows: CsvRow[], extraColumns: string[] = []) {
+  const header = [...COLUMNS, ...extraColumns];
+  const csv = toCsv(header, rows.map((r) => header.map((c) => r[c] ?? '')));
+  const fake = createImportFake({ portfolios: PORTFOLIOS, assets: ASSETS, asset_aliases: [], fx_rates: FX_RATES });
+  h.client = fake.client;
+  const res = await POST(confirmRequest(csv) as any);
+  const body = await res.json();
+  return { status: res.status, body, inserted: fake.transactionInserts[0] ?? [], fake };
+}
+
+/** Inserted row without created_at (asserted separately in its own test). */
+function noCreatedAt(r: Row): Row {
+  const { created_at: _ignored, ...rest } = r;
+  return rest;
+}
+
+/** The exact inserted-row shape, with the common defaults filled in. */
+function expectedRow(o: Row): Row {
+  return {
+    portfolio_id: 'p-gbp',
+    date: NO_CACHE_DATE,
+    notes: '',
+    split_factor: null,
+    ...o,
+  };
+}
+
+const gbp = (o: CsvRow): CsvRow => ({ portfolio: 'ISA Account', date_time: NO_CACHE_DATE, ...o });
+
+beforeEach(() => {
+  h.networkCalls.length = 0;
+  vi.stubEnv('SUPABASE_URL', 'http://fake-supabase.invalid');
+  vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'fake-service-role-key');
+  vi.stubGlobal('fetch', vi.fn(() => {
+    h.networkCalls.push('fetch');
+    throw new Error('network blocked in tests');
+  }));
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(BASE_TIME_MS);
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.mocked(processImportedTransfers).mockClear();
+});
+
+afterEach(() => {
+  expect(h.networkCalls).toEqual([]);
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
+
+// ---------------------------------------------------------------------------
+// Same-currency BUY / SELL
+// ---------------------------------------------------------------------------
+
+describe('import confirm — same-currency BUY/SELL (GBP asset, GBP portfolio)', () => {
+  it('BUY with explicit cash: cash_value is the explicit value; settle_value = qty*price+fee; fx = cash/settle', async () => {
+    const { status, inserted } = await importCsv([gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 100, price: 10, fee: 5, cash_value: 1004.5 })]);
+    expect(status).toBe(200);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-vod', type: 'BUY', quantity: 100, price: 10, fee: 5, cash_value: 1004.5, cash_ccy: 'GBP', settle_value: 1005, settle_ccy: 'GBP', cash_fx_to_portfolio: 1004.5 / 1005 }),
+    ]);
+  });
+
+  it('BUY with blank cash (arrives as 0, not a positive explicit value): same-currency fallback stores cash_value = qty*price+fee with fx 1', async () => {
+    const { inserted } = await importCsv([gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 100, price: 10, fee: 5 })]);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-vod', type: 'BUY', quantity: 100, price: 10, fee: 5, cash_value: 1005, cash_ccy: 'GBP', settle_value: 1005, settle_ccy: 'GBP', cash_fx_to_portfolio: 1 }),
+    ]);
+  });
+
+  it('SELL with explicit cash: cash_value is the explicit net proceeds; settle_value is still qty*price+fee (not net)', async () => {
+    const { inserted } = await importCsv([gbp({ ticker: 'VOD.L', transaction_type: 'SELL', quantity: 40, price: 12, fee: 3, cash_value: 477 })]);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-vod', type: 'SELL', quantity: 40, price: 12, fee: 3, cash_value: 477, cash_ccy: 'GBP', settle_value: 483, settle_ccy: 'GBP', cash_fx_to_portfolio: 477 / 483 }),
+    ]);
+  });
+
+  it('CURRENT BEHAVIOUR — KNOWN DEFECT C1 (not desired): SELL with blank cash stores qty*price+fee = 483.00, not net proceeds 477.00', async () => {
+    const { inserted } = await importCsv([gbp({ ticker: 'VOD.L', transaction_type: 'SELL', quantity: 40, price: 12, fee: 3 })]);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-vod', type: 'SELL', quantity: 40, price: 12, fee: 3, cash_value: 483, cash_ccy: 'GBP', settle_value: 483, settle_ccy: 'GBP', cash_fx_to_portfolio: 1 }),
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cross-currency BUY / SELL (USD asset, GBP portfolio)
+// ---------------------------------------------------------------------------
+
+describe('import confirm — cross-currency BUY/SELL (USD asset, GBP portfolio)', () => {
+  it('explicit positive cash is used for both BUY and SELL; settle stays in USD', async () => {
+    const { inserted } = await importCsv([
+      gbp({ ticker: 'AAPL', transaction_type: 'BUY', quantity: 10, price: 150, fee: 2, cash_value: 1185.98 }),
+      gbp({ ticker: 'AAPL', transaction_type: 'SELL', quantity: 10, price: 150, fee: 10, cash_value: 1192 }),
+    ]);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-aapl', type: 'BUY', quantity: 10, price: 150, fee: 2, cash_value: 1185.98, cash_ccy: 'GBP', settle_value: 1502, settle_ccy: 'USD', cash_fx_to_portfolio: 1185.98 / 1502 }),
+      expectedRow({ asset_id: 'a-aapl', type: 'SELL', quantity: 10, price: 150, fee: 10, cash_value: 1192, cash_ccy: 'GBP', settle_value: 1510, settle_ccy: 'USD', cash_fx_to_portfolio: 1192 / 1510 }),
+    ]);
+  });
+
+  it('explicit fxrate with blank cash: cash_value = (qty*price+fee) x rate (SELL: KNOWN DEFECT C1, overstated by 2 x fee x rate)', async () => {
+    const { inserted } = await importCsv([
+      gbp({ ticker: 'AAPL', transaction_type: 'BUY', quantity: 10, price: 150, fee: 2, fxrate: 0.8 }),
+      gbp({ ticker: 'AAPL', transaction_type: 'SELL', quantity: 10, price: 150, fee: 10, fxrate: 0.8 }),
+    ]);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-aapl', type: 'BUY', quantity: 10, price: 150, fee: 2, cash_value: 1502 * 0.8, cash_ccy: 'GBP', settle_value: 1502, settle_ccy: 'USD', cash_fx_to_portfolio: 0.8 }),
+      expectedRow({ asset_id: 'a-aapl', type: 'SELL', quantity: 10, price: 150, fee: 10, cash_value: 1510 * 0.8, cash_ccy: 'GBP', settle_value: 1510, settle_ccy: 'USD', cash_fx_to_portfolio: 0.8 }),
+    ]);
+  });
+
+  it('CURRENT BEHAVIOUR — KNOWN DEFECT C15 (not desired): blank cash and blank fxrate on a date WITH a cached rate are BLOCKED — the cache is fetched but never used, because blank cash_value arrives as 0, not null', async () => {
+    const { status, body, fake } = await importCsv([
+      gbp({ ticker: 'AAPL', transaction_type: 'BUY', date_time: CACHE_DATE, quantity: 10, price: 150, fee: 2 }),
+      gbp({ ticker: 'AAPL', transaction_type: 'SELL', date_time: CACHE_DATE, quantity: 10, price: 150, fee: 10 }),
+    ]);
+    const reason = 'No reliable USD->GBP conversion is available for this transaction (no explicit cash value, no FX rate, and no cached rate for the trade date).';
+    // The route still bulk-fetches the local cache for every distinct trade date...
+    expect(fake.calls).toContainEqual({ table: 'fx_rates', op: 'in', column: 'date', values: [CACHE_DATE] });
+    // ...but neither row can use it.
+    expect(status).toBe(400);
+    expect(fake.transactionInserts).toHaveLength(0);
+    expect(body.skippedCashLeg).toEqual([
+      { row: 2, ticker: 'AAPL', date: CACHE_DATE, portfolio: 'ISA Account', reason },
+      { row: 3, ticker: 'AAPL', date: CACHE_DATE, portfolio: 'ISA Account', reason },
+    ]);
+  });
+
+  it('no usable rate: BUY and SELL are BLOCKED, reported in skippedCashLeg and NOT inserted; other rows still import', async () => {
+    const { status, body, inserted } = await importCsv([
+      gbp({ ticker: 'AAPL', transaction_type: 'BUY', quantity: 10, price: 150, fee: 2 }),
+      gbp({ ticker: 'AAPL', transaction_type: 'SELL', quantity: 10, price: 150, fee: 10 }),
+      gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, fee: 0, cash_value: 10 }),
+    ]);
+    const reason = 'No reliable USD->GBP conversion is available for this transaction (no explicit cash value, no FX rate, and no cached rate for the trade date).';
+    expect(status).toBe(200);
+    expect(inserted.map((r) => r.asset_id)).toEqual(['a-vod']);
+    expect(body.skippedCashLeg).toEqual([
+      { row: 2, ticker: 'AAPL', date: NO_CACHE_DATE, portfolio: 'ISA Account', reason },
+      { row: 3, ticker: 'AAPL', date: NO_CACHE_DATE, portfolio: 'ISA Account', reason },
+    ]);
+    expect(body.message).toBe('Imported 1 transaction. 2 rows skipped — no reliable currency conversion (see skippedCashLeg).');
+  });
+
+  it('when EVERY row is blocked: HTTP 400 "No transactions to insert" and no insert call at all', async () => {
+    const { status, body, fake } = await importCsv([gbp({ ticker: 'AAPL', transaction_type: 'BUY', quantity: 10, price: 150, fee: 2 })]);
+    expect(status).toBe(400);
+    expect(body.message).toBe('No transactions to insert');
+    expect(body.skippedCashLeg).toHaveLength(1);
+    expect(fake.transactionInserts).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Negative / non-positive explicit cash on BUY/SELL
+// ---------------------------------------------------------------------------
+
+describe('import confirm — CURRENT handling of a negative explicit cash_value on BUY/SELL', () => {
+  it('same-currency: the negative explicit value is ignored and the qty*price+fee fallback is stored', async () => {
+    const { inserted } = await importCsv([gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 100, price: 10, fee: 5, cash_value: -1004.5 })]);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-vod', type: 'BUY', quantity: 100, price: 10, fee: 5, cash_value: 1005, cash_ccy: 'GBP', settle_value: 1005, settle_ccy: 'GBP', cash_fx_to_portfolio: 1 }),
+    ]);
+  });
+
+  it('cross-currency with an fxrate: the negative explicit value is ignored and the fxrate conversion is stored', async () => {
+    const { inserted } = await importCsv([gbp({ ticker: 'AAPL', transaction_type: 'BUY', quantity: 10, price: 150, fee: 2, fxrate: 0.8, cash_value: -1185.98 })]);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-aapl', type: 'BUY', quantity: 10, price: 150, fee: 2, cash_value: 1502 * 0.8, cash_ccy: 'GBP', settle_value: 1502, settle_ccy: 'USD', cash_fx_to_portfolio: 0.8 }),
+    ]);
+  });
+
+  it('cross-currency with NO fxrate on a date that HAS a cached rate: BLOCKED (the cache is consulted only when cash_value is null)', async () => {
+    const { status, body, fake } = await importCsv([gbp({ ticker: 'AAPL', transaction_type: 'BUY', date_time: CACHE_DATE, quantity: 10, price: 150, fee: 2, cash_value: -1185.98 })]);
+    expect(status).toBe(400);
+    expect(body.skippedCashLeg).toEqual([
+      {
+        row: 2,
+        ticker: 'AAPL',
+        date: CACHE_DATE,
+        portfolio: 'ISA Account',
+        reason: 'No reliable USD->GBP conversion is available for this transaction (no explicit cash value, no FX rate, and no cached rate for the trade date).',
+      },
+    ]);
+    expect(fake.transactionInserts).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Signed cash-impact types, FXM, SPL
+// ---------------------------------------------------------------------------
+
+describe('import confirm — signed cash-impact types', () => {
+  it('CURRENT BEHAVIOUR — cross-reference KNOWN DEFECT C3: a negative DIV cash_value is STORED signed (-5.00, fx -1); the cash engine later adds abs()', async () => {
+    const { inserted } = await importCsv([gbp({ ticker: 'VOD.L', transaction_type: 'DIV', quantity: 1, price: 5, fee: 0, cash_value: -5 })]);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-vod', type: 'DIV', quantity: 1, price: 5, fee: 0, cash_value: -5, cash_ccy: 'GBP', settle_value: 5, settle_ccy: 'GBP', cash_fx_to_portfolio: -1 }),
+    ]);
+  });
+
+  it('CURRENT BEHAVIOUR — KNOWN DEFECT C15 (not desired): a same-currency OTR with blank cash stores cash_value 0 (the signed-explicit branch trusts the coerced 0), so it has no cash effect', async () => {
+    const { inserted } = await importCsv([gbp({ ticker: 'CASH.GBP', transaction_type: 'OTR', quantity: 1, price: 0.02, fee: 0 })]);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-cash-gbp', type: 'OTR', quantity: 1, price: 0.02, fee: 0, cash_value: 0, cash_ccy: 'GBP', settle_value: 0.02, settle_ccy: 'GBP', cash_fx_to_portfolio: 0 }),
+    ]);
+  });
+
+  it('CURRENT BEHAVIOUR — KNOWN DEFECT C9 (not desired): DIV and CASH.* TOT with explicit cash but qty*price+fee = 0 are BLOCKED', async () => {
+    const { body, inserted } = await importCsv([
+      gbp({ ticker: 'VOD.L', transaction_type: 'DIV', quantity: 0, price: 0, fee: 0, cash_value: 12.5 }),
+      gbp({ ticker: 'CASH.GBP', transaction_type: 'TOT', quantity: 0, price: 0, fee: 0, cash_value: 100 }),
+      gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, fee: 0, cash_value: 10 }),
+    ]);
+    const reason = 'No settlement amount to derive a cash leg from.';
+    expect(inserted.map((r) => r.type)).toEqual(['BUY']);
+    expect(body.skippedCashLeg).toEqual([
+      { row: 2, ticker: 'VOD.L', date: NO_CACHE_DATE, portfolio: 'ISA Account', reason },
+      { row: 3, ticker: 'CASH.GBP', date: NO_CACHE_DATE, portfolio: 'ISA Account', reason },
+    ]);
+  });
+});
+
+describe('import confirm — FXM (ungated)', () => {
+  it('a signed FXM cash_value passes through unchanged; cash_ccy is the portfolio currency; fx is the raw CSV fxrate (blank arrives as 0 — C15)', async () => {
+    const { inserted } = await importCsv([gbp({ ticker: 'CASH.GBP', transaction_type: 'FXM', quantity: 0, price: 0, fee: 0, cash_value: -12.34 })]);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-cash-gbp', type: 'FXM', quantity: 0, price: 0, fee: 0, cash_value: -12.34, cash_ccy: 'GBP', settle_value: 0, settle_ccy: 'GBP', cash_fx_to_portfolio: 0 }),
+    ]);
+  });
+
+  it('CURRENT BEHAVIOUR — KNOWN DEFECT C15 (not desired): FXM with blank cash stores 0 (the qty*price+fee fallback in resolveUngatedCashValue is unreachable); an unvalidated CSV fxrate is stored as-is', async () => {
+    const { inserted } = await importCsv([gbp({ ticker: 'CASH.GBP', transaction_type: 'FXM', quantity: 1, price: 3, fee: 0, fxrate: 0.5 })]);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-cash-gbp', type: 'FXM', quantity: 1, price: 3, fee: 0, cash_value: 0, cash_ccy: 'GBP', settle_value: 3, settle_ccy: 'GBP', cash_fx_to_portfolio: 0.5 }),
+    ]);
+  });
+});
+
+describe('import confirm — SPL', () => {
+  it('split_factor comes from the CSV quantity; quantity/price/fee/settle_value are zeroed; cash_value/cash_ccy are null; fx is the raw CSV fxrate (blank -> 0, C15)', async () => {
+    const { inserted } = await importCsv([gbp({ ticker: 'VOD.L', transaction_type: 'SPL', quantity: 2, price: 99, fee: 1 })]);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-vod', type: 'SPL', quantity: 0, price: 0, fee: 0, cash_value: null, cash_ccy: null, settle_value: 0, settle_ccy: 'GBP', cash_fx_to_portfolio: 0, split_factor: 2 }),
+    ]);
+  });
+
+  it('CURRENT behaviour: an SPL with a zero ratio aborts the WHOLE import with HTTP 500, inserting nothing (valid rows included)', async () => {
+    const { status, body, fake } = await importCsv([
+      gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, fee: 0, cash_value: 10 }),
+      gbp({ ticker: 'VOD.L', transaction_type: 'SPL', quantity: 0 }),
+    ]);
+    expect(status).toBe(500);
+    expect(body.message).toBe('Server error during import');
+    expect(fake.transactionInserts).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Currencies, ignored columns, ordering, transfers, parsing
+// ---------------------------------------------------------------------------
+
+describe('import confirm — currencies and ignored CSV columns', () => {
+  it('CSV settle_value / settle_ccy / cash_ccy columns are ignored: settle_value is recomputed, settle_ccy is the asset currency, cash_ccy the portfolio base', async () => {
+    const { inserted } = await importCsv(
+      [gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 100, price: 10, fee: 5, settle_value: 999999, settle_ccy: 'EUR', cash_ccy: 'USD' })],
+      ['settle_value', 'settle_ccy', 'cash_ccy']
+    );
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-vod', type: 'BUY', quantity: 100, price: 10, fee: 5, cash_value: 1005, cash_ccy: 'GBP', settle_value: 1005, settle_ccy: 'GBP', cash_fx_to_portfolio: 1 }),
+    ]);
+  });
+
+  it('cash_ccy is always the portfolio base currency (USD portfolio buying a GBP asset: cash_ccy USD, settle_ccy GBP)', async () => {
+    const { inserted } = await importCsv([
+      { portfolio: 'US Book', date_time: NO_CACHE_DATE, ticker: 'VOD.L', transaction_type: 'BUY', quantity: 100, price: 10, fee: 5, cash_value: 1300 },
+    ]);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ portfolio_id: 'p-usd', asset_id: 'a-vod', type: 'BUY', quantity: 100, price: 10, fee: 5, cash_value: 1300, cash_ccy: 'USD', settle_value: 1005, settle_ccy: 'GBP', cash_fx_to_portfolio: 1300 / 1005 }),
+    ]);
+  });
+});
+
+describe('import confirm — created_at staggering', () => {
+  it('each inserted row gets now + (its index among INSERTED rows) ms, in CSV order; a blocked row does not consume an index', async () => {
+    const { inserted } = await importCsv([
+      gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 100, price: 10, fee: 0, cash_value: 1000 }),
+      gbp({ ticker: 'AAPL', transaction_type: 'BUY', quantity: 10, price: 150, fee: 2 }), // blocked: no rate
+      gbp({ ticker: 'VOD.L', transaction_type: 'SELL', quantity: 40, price: 12, fee: 0, cash_value: 480 }),
+      gbp({ ticker: 'CASH.GBP', transaction_type: 'DEP', quantity: 1, price: 100, fee: 0, cash_value: 100 }),
+    ]);
+    expect(inserted.map((r) => r.type)).toEqual(['BUY', 'SELL', 'DEP']);
+    expect(inserted.map((r) => r.created_at)).toEqual([
+      new Date(BASE_TIME_MS + 0).toISOString(),
+      new Date(BASE_TIME_MS + 1).toISOString(),
+      new Date(BASE_TIME_MS + 2).toISOString(),
+    ]);
+  });
+});
+
+describe('import confirm — security TIN/TOT (ungated)', () => {
+  it('a security TIN is never FX-gated or blocked, even for a USD asset with no rate; blank cash is stored as 0 (C15); settle_value = qty*price+fee in the asset currency', async () => {
+    const { inserted } = await importCsv([
+      gbp({ ticker: 'VOD.L', transaction_type: 'TIN', quantity: 10, price: 5, fee: 0 }),
+      gbp({ ticker: 'AAPL', transaction_type: 'TIN', quantity: 10, price: 150, fee: 0 }),
+      gbp({ ticker: 'AAPL', transaction_type: 'TIN', quantity: 10, price: 150, fee: 0, cash_value: 1500 }),
+    ]);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-vod', type: 'TIN', quantity: 10, price: 5, fee: 0, cash_value: 0, cash_ccy: 'GBP', settle_value: 50, settle_ccy: 'GBP', cash_fx_to_portfolio: 0 }),
+      expectedRow({ asset_id: 'a-aapl', type: 'TIN', quantity: 10, price: 150, fee: 0, cash_value: 0, cash_ccy: 'GBP', settle_value: 1500, settle_ccy: 'USD', cash_fx_to_portfolio: 0 }),
+      // CURRENT behaviour: an explicit value is stored as supplied and labelled with the portfolio
+      // currency, without conversion. Nothing downstream reads a security TIN's cash_value.
+      expectedRow({ asset_id: 'a-aapl', type: 'TIN', quantity: 10, price: 150, fee: 0, cash_value: 1500, cash_ccy: 'GBP', settle_value: 1500, settle_ccy: 'USD', cash_fx_to_portfolio: 0 }),
+    ]);
+    expect(vi.mocked(processImportedTransfers)).toHaveBeenCalledTimes(1);
+  });
+
+  it('a generic "transfer" row with negative quantity becomes a TOT with the absolute quantity', async () => {
+    const { inserted } = await importCsv([gbp({ ticker: 'VOD.L', transaction_type: 'transfer', quantity: -10, price: 5, fee: 0 })]);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-vod', type: 'TOT', quantity: 10, price: 5, fee: 0, cash_value: 0, cash_ccy: 'GBP', settle_value: 50, settle_ccy: 'GBP', cash_fx_to_portfolio: 0 }),
+    ]);
+  });
+});
+
+describe('import confirm — parsing and row filtering', () => {
+  it('numeric cleaning strips currency symbols and thousands separators ("1,000", "£1.50", "£1,502.00")', async () => {
+    const { inserted } = await importCsv([gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: '1,000', price: '£1.50', fee: '£2', cash_value: '£1,502.00' })]);
+    expect(inserted.map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-vod', type: 'BUY', quantity: 1000, price: 1.5, fee: 2, cash_value: 1502, cash_ccy: 'GBP', settle_value: 1502, settle_ccy: 'GBP', cash_fx_to_portfolio: 1 }),
+    ]);
+  });
+
+  it('input type aliases map to canonical types ("dividend" -> DIV, "with" -> WIT, "other" -> OTR)', async () => {
+    const { inserted } = await importCsv([
+      gbp({ ticker: 'VOD.L', transaction_type: 'dividend', quantity: 1, price: 5, cash_value: 5 }),
+      gbp({ ticker: 'CASH.GBP', transaction_type: 'with', quantity: 1, price: 200, cash_value: 200 }),
+      gbp({ ticker: 'CASH.GBP', transaction_type: 'other', quantity: 1, price: 1, cash_value: -1 }),
+    ]);
+    expect(inserted.map((r) => [r.type, r.cash_value])).toEqual([
+      ['DIV', 5],
+      ['WIT', 200],
+      ['OTR', -1],
+    ]);
+  });
+
+  it('CURRENT behaviour: rows that fail validation or portfolio matching (including another user\'s portfolio) are dropped, and the SUCCESS response does not report them', async () => {
+    const { status, body, inserted } = await importCsv([
+      gbp({ ticker: 'VOD.L', transaction_type: 'bogus', quantity: 1, price: 10, cash_value: 10 }),
+      { portfolio: 'Someone Else', date_time: NO_CACHE_DATE, ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, cash_value: 10 },
+      gbp({ ticker: 'GBP', transaction_type: 'DEP', quantity: 1, price: 10, cash_value: 10 }), // 'GBP' placeholder rows are skipped outright
+      gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, fee: 0, cash_value: 10 }),
+    ]);
+    expect(status).toBe(200);
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0]).toMatchObject({ portfolio_id: 'p-gbp', type: 'BUY' });
+    expect(body.message).toBe('Imported 1 transaction.');
+    expect(Object.keys(body).sort()).toEqual(['message', 'skippedCashLeg', 'transferResult']);
+  });
+});
