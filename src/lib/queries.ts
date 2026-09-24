@@ -17,6 +17,7 @@ import {
   type ResolvedTransferLookup,
 } from './holdingsTransferIntegration';
 import { resolveRealisedCcy, resolveDefinitionBBaseCurrencies } from './definitionBDisplay';
+import { compareTransactionsForReplay } from './transactionOrdering';
 
 // ----------------------------- Types -----------------------------
 
@@ -181,39 +182,6 @@ function stableSortTx<T extends { date?: string | null; created_at?: string | nu
 
     return a.id < b.id ? -1 : 1;
   });
-}
-
-/* Deterministic intra-day ordering so entries (TIN/BUY/SPL) precede exits (SELL/TOT) */
-const TYPE_PRIORITY: Record<string, number> = {
-  SPL: 10,
-  TIN: 20,
-  BUY: 30,
-  SELL: 40,
-  TOT: 50,
-  DIV: 90,
-  INT: 95,
-  FEE: 96,
-  DEP: 97,
-  WIT: 98,
-  OTR: 99,
-  FXM: 99,
-  BAL: 100,
-};
-
-function compareTxForHoldings(a: Txn, b: Txn) {
-  const da = a.date ?? '';
-  const db = b.date ?? '';
-  if (da !== db) return da < db ? -1 : 1;
-
-  const ca = a.created_at ?? '';
-  const cb = b.created_at ?? '';
-  if (ca !== cb) return ca < cb ? -1 : 1;
-
-  const pa = TYPE_PRIORITY[(a.type || '').toUpperCase()] ?? 1000;
-  const pb = TYPE_PRIORITY[(b.type || '').toUpperCase()] ?? 1000;
-  if (pa !== pb) return pa - pb;
-
-  return a.id < b.id ? -1 : 1;
 }
 
 /** Filter transactions up to asOf date. `inclusive` (default true) controls
@@ -884,7 +852,7 @@ export async function getPortfoliosWithHoldingsAndCash(
     }
 
     // Apply holdings transactions
-    holdingsTxns.sort(compareTxForHoldings); // ensure entry before exit same day
+    holdingsTxns.sort(compareTransactionsForReplay); // ensure entry before exit same day
     for (const txn of holdingsTxns) {
       const meta = assetMeta[txn.asset_id] || ({ ticker: txn.asset_id, currency: baseCurrency } as AssetMeta);
       const ticker = meta.ticker || txn.asset_id;
@@ -1018,7 +986,7 @@ export async function getAllHoldingsAndCashSummary(
     holdingsTxns.push(tx);
   }
 
-  holdingsTxns.sort(compareTxForHoldings);
+  holdingsTxns.sort(compareTransactionsForReplay);
 
   // Definition B activation (global/blended view): a ticker's open-cost
   // ledger (base_total_cost, and — through it — base_realised_*) may only

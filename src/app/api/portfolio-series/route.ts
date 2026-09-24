@@ -3,27 +3,13 @@ import { getSupabaseServerClient } from '@/lib/supabase-server';
 import { createClient } from '@supabase/supabase-js';
 import { performance } from 'node:perf_hooks';
 import { type Ccy, type Txn, type AssetMeta, isCashTicker, newCashMap, applyCashTxn } from '@/lib/portfolio-series-cash';
+import { compareTransactionsForReplay } from '@/lib/transactionOrdering';
 
 export const dynamic = 'force-dynamic';
 
 type SeriesPoint = { date: string; value_gbp: number };
 type ChangesMap = Record<string, number>; // ticker -> change in GBP over range
 type ChangesNativeMap = Record<string, number>; // ticker -> native-currency change for selected range
-
-const TYPE_PRIORITY: Record<string, number> = {
-  SPL: 10,
-  TIN: 20,
-  BUY: 30,
-  SELL: 40,
-  TOT: 50,
-  DIV: 90,
-  INT: 95,
-  FEE: 96,
-  DEP: 97,
-  WIT: 98,
-  OTR: 99,
-  BAL: 100,
-};
 
 type AssetRow = {
   id: string;
@@ -33,19 +19,6 @@ type AssetRow = {
   resolved_ticker?: string | null;
   price_multiplier?: number | null;
 };
-
-function compareTxForHoldings(a: Txn, b: Txn) {
-  const da = a.date ?? '';
-  const db = b.date ?? '';
-  if (da !== db) return da < db ? -1 : 1;
-  const ca = a.created_at ?? '';
-  const cb = b.created_at ?? '';
-  if (ca !== cb) return ca < cb ? -1 : 1;
-  const pa = TYPE_PRIORITY[(a.type || '').toUpperCase()] ?? 1000;
-  const pb = TYPE_PRIORITY[(b.type || '').toUpperCase()] ?? 1000;
-  if (pa !== pb) return pa - pb;
-  return a.id < b.id ? -1 : 1;
-}
 
 async function fetchAllTable<T = any>(
   supabase: any,
@@ -420,7 +393,7 @@ export async function GET(request: Request) {
       const d = String(tx.date).slice(0, 10);
       return d <= today;
     })
-    .sort(compareTxForHoldings);
+    .sort(compareTransactionsForReplay);
 
   // Compute "current" holdings tickers (and cash) without calling queries.ts,
   // to avoid a second full read of transactions.
@@ -432,8 +405,8 @@ export async function GET(request: Request) {
     if (!tx.date) undatedNow.push(tx);
     else datedNow.push(tx);
   }
-  undatedNow.sort(compareTxForHoldings);
-  datedNow.sort(compareTxForHoldings);
+  undatedNow.sort(compareTransactionsForReplay);
+  datedNow.sort(compareTransactionsForReplay);
   for (const tx of undatedNow) {
     const meta = assetById[tx.asset_id];
     if (!meta) continue;
@@ -901,9 +874,9 @@ export async function GET(request: Request) {
       (byDate[d] ||= []).push(tx);
     }
   }
-  undated.sort(compareTxForHoldings);
-  beforeRange.sort(compareTxForHoldings);
-  for (const list of Object.values(byDate)) list.sort(compareTxForHoldings);
+  undated.sort(compareTransactionsForReplay);
+  beforeRange.sort(compareTransactionsForReplay);
+  for (const list of Object.values(byDate)) list.sort(compareTransactionsForReplay);
 
   const sharesByTicker: Record<string, number> = {};
   const cash = newCashMap();

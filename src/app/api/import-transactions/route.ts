@@ -639,8 +639,8 @@ export async function POST(req: NextRequest) {
     // A single multi-row INSERT gives every row the SAME created_at (verified
     // directly against this project's local dev Postgres: `now()` is the
     // transaction's start time, identical for every row in one statement).
-    // The holdings/transfer-replay ordering (queries.ts's compareTxForHoldings,
-    // and transferImportIntegration.ts's compareForReplay) uses created_at as
+    // The holdings/transfer-replay ordering (the shared
+    // compareTransactionsForReplay in src/lib/transactionOrdering.ts) uses created_at as
     // its second tiebreaker, after date — so without a distinct value per row,
     // several same-date rows in ONE import batch fall through to a
     // type-priority/UUID tiebreak that does not reflect the CSV's own row

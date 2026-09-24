@@ -21,6 +21,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { applyTransactionToHolding, type Holding, type Txn } from './queries';
 import { captureTransferOut, capturePendingIn, type NewTransferRow, type TransferRecord } from './transfers';
 import { suggestTransferMatches, type MatchCandidateInput, type MatchSuggestion } from './transferMatching';
+import { compareTransactionsForReplay } from './transactionOrdering';
 
 export const isCashTicker = (ticker?: string | null) => !!ticker && ticker.toUpperCase().startsWith('CASH.');
 
@@ -34,23 +35,8 @@ export type InsertedTxnForTransfer = {
   notes?: string | null;
 };
 
-/** Mirrors queries.ts's compareTxForHoldings ordering (not exported there) so replay for parcel capture matches the live engine's own ordering. */
-const TYPE_PRIORITY: Record<string, number> = {
-  SPL: 10, TIN: 20, BUY: 30, SELL: 40, TOT: 50, DIV: 90, INT: 95, FEE: 96, DEP: 97, WIT: 98, OTR: 99, BAL: 100,
-};
-
-export function compareForReplay(a: Txn, b: Txn): number {
-  const da = a.date ?? '';
-  const db = b.date ?? '';
-  if (da !== db) return da < db ? -1 : 1;
-  const ca = a.created_at ?? '';
-  const cb = b.created_at ?? '';
-  if (ca !== cb) return ca < cb ? -1 : 1;
-  const pa = TYPE_PRIORITY[(a.type || '').toUpperCase()] ?? 1000;
-  const pb = TYPE_PRIORITY[(b.type || '').toUpperCase()] ?? 1000;
-  if (pa !== pb) return pa - pb;
-  return a.id < b.id ? -1 : 1;
-}
+/** Replay ordering for parcel capture: the same shared comparator the live engine uses (src/lib/transactionOrdering.ts), kept under its existing exported name. */
+export const compareForReplay: (a: Txn, b: Txn) => number = compareTransactionsForReplay;
 
 /**
  * From a batch of just-inserted transaction rows, selects only the ones this
