@@ -133,6 +133,9 @@ function canonicalizeType(raw: string): CanonicalType | 'TRANSFER_GENERIC' {
   return 'OTR';
 }
 
+// C17: user-facing reason for an SPL row whose ratio (CSV quantity) is <= 0.
+const SPL_RATIO_REASON = 'Invalid split ratio: SPL quantity must be greater than 0.';
+
 // ---------- CSV row schema ----------
 const transactionSchema = z.object({
   portfolio: z.string().min(1)
@@ -320,6 +323,9 @@ export async function POST(req: NextRequest) {
     // C16: 'GBP' cash placeholder rows are ignored, not rejected. Recorded
     // only so the confirm-stage success response can report them.
     const ignoredRows: { row: number; reason: string }[] = [];
+    // C17: SPL rows with a ratio <= 0 (also in `errors`). Any at confirm
+    // aborts the whole import before anything is written.
+    const invalidSplitRows: { row: number; ticker: string; reason: string }[] = [];
     const seenNewTickers = new Set<string>();
 
     // Validate + normalize input rows
@@ -389,6 +395,16 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
+        // C17: an SPL ratio (the CSV quantity) must be > 0. Reported as an
+        // invalid row at preview; at confirm it refuses the whole import
+        // before any write, because importing later rows without the split
+        // would misstate the holding.
+        if (canonicalizeType(parsed.transaction_type) === 'SPL' && !(Number(parsed.quantity) > 0)) {
+          errors.push({ row: rowNum, issues: [{ message: SPL_RATIO_REASON }] });
+          invalidSplitRows.push({ row: rowNum, ticker, reason: SPL_RATIO_REASON });
+          continue;
+        }
+
         // Resolution order: exact ticker/resolved_ticker match (incl. the
         // .L toggle tolerance), then an explicit asset_aliases entry, then
         // "potentially new". See src/lib/assetResolution.ts.
@@ -454,6 +470,23 @@ export async function POST(req: NextRequest) {
     }
 
     // -------- Confirm stage (insert) --------
+    // C17: refuse the whole import if any SPL ratio is invalid. This runs
+    // before new-asset creation and every other write in this request.
+    if (invalidSplitRows.length > 0) {
+      const rowList = invalidSplitRows.map((r) => r.row).join(', ');
+      return NextResponse.json(
+        safe({
+          message:
+            `Import aborted — nothing was imported. Invalid split ratio on ` +
+            `row${invalidSplitRows.length > 1 ? 's' : ''} ${rowList}: SPL quantity must be greater than 0. ` +
+            `Fix the file and import it again.`,
+          invalidSplitRows,
+          availablePortfolios,
+        }),
+        { status: 400 }
+      );
+    }
+
     const confirmedTickersRaw = formData.get('confirmedTickers');
     const confirmedTickers = Array.isArray(confirmedTickersRaw)
       ? (confirmedTickersRaw as string[])
@@ -708,6 +741,7 @@ export async function POST(req: NextRequest) {
 
       if (type === 'SPL') {
         split_factor = Number(raw.quantity);
+        // Safeguard only: C17 validation above refuses these before any write.
         if (!split_factor || split_factor <= 0) {
           throw new Error(`Invalid split ratio in CSV for SPL (row with ticker ${base})`);
         }

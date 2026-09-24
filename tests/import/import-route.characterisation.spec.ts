@@ -34,6 +34,11 @@
 // reports rows dropped by validation or portfolio matching in rejectedRows, and
 // 'GBP' placeholder rows in ignoredRows, with counts in the message. Reporting
 // only: which rows import is unchanged. See the "C16" describe block below.
+//
+// C17 (FIXED 2026-09-24): an SPL ratio (CSV quantity) <= 0, including a blank,
+// is invalid input. Preview reports it as an invalid row; confirm refuses the
+// WHOLE import with HTTP 400 naming the rows, before any write (no asset
+// creation, no transactions). See the "C17" describe block below.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createImportFake, confirmRequest, toCsv, type Row } from './importRouteHarness';
@@ -382,15 +387,112 @@ describe('import confirm — SPL', () => {
       expectedRow({ asset_id: 'a-vod', type: 'SPL', quantity: 0, price: 0, fee: 0, cash_value: null, cash_ccy: null, settle_value: 0, settle_ccy: 'GBP', cash_fx_to_portfolio: null, split_factor: 2 }),
     ]);
   });
+});
 
-  it('CURRENT behaviour: an SPL with a zero ratio aborts the WHOLE import with HTTP 500, inserting nothing (valid rows included)', async () => {
-    const { status, body, fake } = await importCsv([
-      gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, fee: 0, cash_value: 10 }),
-      gbp({ ticker: 'VOD.L', transaction_type: 'SPL', quantity: 0 }),
-    ]);
-    expect(status).toBe(500);
-    expect(body.message).toBe('Server error during import');
+// ---------------------------------------------------------------------------
+// C17 (FIXED 2026-09-24): an SPL ratio <= 0 is invalid input. Preview reports
+// the row; confirm refuses the WHOLE import with HTTP 400 before any write.
+// The bad split is never skipped while the rest imports.
+// ---------------------------------------------------------------------------
+
+describe('import — C17: an SPL ratio <= 0 is invalid input and refuses the whole import', () => {
+  const REASON = 'Invalid split ratio: SPL quantity must be greater than 0.';
+
+  function csvOf(rows: CsvRow[]) {
+    return toCsv(COLUMNS, rows.map((r) => COLUMNS.map((c) => r[c] ?? '')));
+  }
+
+  async function previewCsv(rows: CsvRow[]) {
+    const fake = createImportFake({ portfolios: PORTFOLIOS, assets: ASSETS, asset_aliases: [], fx_rates: FX_RATES });
+    h.client = fake.client;
+    const fd = new FormData();
+    fd.append('file', new File([csvOf(rows)], 'import.csv', { type: 'text/csv' }));
+    const res = await POST(new Request('http://localhost/api/import-transactions?stage=preview', { method: 'POST', body: fd }) as any);
+    return { status: res.status, body: await res.json(), fake };
+  }
+
+  const BUY = gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, fee: 0, cash_value: 10 });
+
+  it.each([
+    ['zero', 0],
+    ['negative', -2],
+    ['blank (still parsed as 0)', ''],
+  ])('%s ratio: confirm returns HTTP 400 naming the CSV row, and inserts nothing (valid rows included)', async (_label, ratio) => {
+    const { status, body, fake } = await importCsv([BUY, gbp({ ticker: 'VOD.L', transaction_type: 'SPL', quantity: ratio })]);
+    expect(status).toBe(400);
+    expect(body.message).toBe(
+      'Import aborted — nothing was imported. Invalid split ratio on row 3: SPL quantity must be greater than 0. Fix the file and import it again.',
+    );
+    expect(body.invalidSplitRows).toEqual([{ row: 3, ticker: 'VOD.L', reason: REASON }]);
     expect(fake.transactionInserts).toHaveLength(0);
+    expect(fake.calls.filter((c) => c.op === 'insert')).toEqual([]);
+  });
+
+  it('several invalid splits: every row is named (plural wording)', async () => {
+    const { status, body } = await importCsv([
+      gbp({ ticker: 'VOD.L', transaction_type: 'SPL', quantity: 0 }),
+      BUY,
+      gbp({ ticker: 'AAPL', transaction_type: 'split', quantity: -1 }),
+    ]);
+    expect(status).toBe(400);
+    expect(body.message).toBe(
+      'Import aborted — nothing was imported. Invalid split ratio on rows 2, 4: SPL quantity must be greater than 0. Fix the file and import it again.',
+    );
+    expect(body.invalidSplitRows.map((r: any) => [r.row, r.ticker])).toEqual([[2, 'VOD.L'], [4, 'AAPL']]);
+  });
+
+  it('preview reports the invalid split as an invalid row with its CSV row number and reason; valid rows are still counted', async () => {
+    const { status, body, fake } = await previewCsv([BUY, BUY, gbp({ ticker: 'VOD.L', transaction_type: 'SPL', quantity: 0 })]);
+    expect(status).toBe(200);
+    expect(body.validCount).toBe(2);
+    expect(body.invalidCount).toBe(1);
+    expect(body.errors).toEqual([{ row: 4, issues: [{ message: REASON }] }]);
+    expect(fake.calls.filter((c) => c.op === 'insert')).toEqual([]);
+  });
+
+  it('a newly confirmed ticker in the same request is NOT created as an asset: the abort comes before asset creation and any lookup', async () => {
+    const fake = createImportFake({ portfolios: PORTFOLIOS, assets: ASSETS, asset_aliases: [], fx_rates: FX_RATES });
+    h.client = fake.client;
+    const fd = new FormData();
+    fd.append('file', new File([csvOf([
+      gbp({ ticker: 'NEWCO', transaction_type: 'BUY', quantity: 1, price: 10, cash_value: 10 }),
+      gbp({ ticker: 'VOD.L', transaction_type: 'SPL', quantity: 0 }),
+    ])], 'import.csv', { type: 'text/csv' }));
+    fd.append('confirmedTickers', JSON.stringify(['NEWCO']));
+    // A valid manual currency means that, without the C17 check, the route would go
+    // straight to inserting the NEWCO asset (which this harness refuses loudly).
+    fd.append('manualTickerMetadata', JSON.stringify({ NEWCO: { currency: 'GBP', name: 'New Co' } }));
+    const res = await POST(new Request('http://localhost/api/import-transactions?stage=confirm', { method: 'POST', body: fd }) as any);
+    const body = await res.json();
+    expect(res.status).toBe(400);
+    expect(body.invalidSplitRows).toEqual([{ row: 3, ticker: 'VOD.L', reason: REASON }]);
+    expect(fake.calls.filter((c) => c.op === 'insert')).toEqual([]);
+    expect(fake.calls.filter((c) => c.table === 'fx_rates')).toEqual([]);
+  });
+
+  it('a split row that already fails portfolio matching keeps its portfolio reason (C16) and does not abort the import', async () => {
+    const { status, body, inserted } = await importCsv([
+      BUY,
+      { portfolio: 'Someone Else', date_time: NO_CACHE_DATE, ticker: 'VOD.L', transaction_type: 'SPL', quantity: 0 },
+    ]);
+    expect(status).toBe(200);
+    expect(inserted).toHaveLength(1);
+    expect(body.rejectedRows).toEqual([{ row: 3, reason: "No matching portfolio for 'Someone Else'" }]);
+  });
+
+  it('valid SPL rows are unchanged: fractional and > 1 ratios import alongside other rows exactly as before', async () => {
+    const { status, body, inserted } = await importCsv([
+      BUY,
+      gbp({ ticker: 'VOD.L', transaction_type: 'SPL', quantity: 0.5 }),
+      gbp({ ticker: 'VOD.L', transaction_type: 'split', quantity: 3 }),
+    ]);
+    expect(status).toBe(200);
+    expect(body.message).toBe('Imported 3 transactions.');
+    expect(body.rejectedRows).toEqual([]);
+    expect(inserted.slice(1).map(noCreatedAt)).toEqual([
+      expectedRow({ asset_id: 'a-vod', type: 'SPL', quantity: 0, price: 0, fee: 0, cash_value: null, cash_ccy: null, settle_value: 0, settle_ccy: 'GBP', cash_fx_to_portfolio: null, split_factor: 0.5 }),
+      expectedRow({ asset_id: 'a-vod', type: 'SPL', quantity: 0, price: 0, fee: 0, cash_value: null, cash_ccy: null, settle_value: 0, settle_ccy: 'GBP', cash_fx_to_portfolio: null, split_factor: 3 }),
+    ]);
   });
 });
 
