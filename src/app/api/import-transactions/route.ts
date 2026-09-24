@@ -154,9 +154,11 @@ const transactionSchema = z.object({
   quantity: z.coerce.number(),
   price: z.coerce.number(),
   fee: z.union([z.coerce.number(), z.literal('')]).transform((val) => (val === '' ? 0 : val)),
-  fxrate: z.union([z.coerce.number(), z.literal('')]).transform((val) => (val === '' ? null : val)),
+  // C15: blank means "not supplied" (null); an explicit 0 stays 0. The blank
+  // check must come first: z.coerce.number() accepts '' and returns 0.
+  fxrate: z.union([z.literal('').transform(() => null), z.coerce.number()]),
   // prefer cash_value header only (no fallback to settle_value)
-  cash_value: z.union([z.coerce.number(), z.literal('')]).transform((val) => (val === '' ? null : val)),
+  cash_value: z.union([z.literal('').transform(() => null), z.coerce.number()]),
   notes: z.string().optional(),
 });
 
@@ -635,6 +637,24 @@ export async function POST(req: NextRequest) {
     // reported, rather than silently inserted with a fabricated conversion.
     const finalRows: any[] = [];
     const skippedCashLeg: { row: number; ticker: string; date: string; portfolio: string; reason: string }[] = [];
+    // C15: rows skipped because a required cash_value was blank. Counted
+    // separately so the summary message never calls them an FX problem.
+    let blankCashSkipCount = 0;
+    const skipBlankCash = (
+      row: { rowNum: number; portfolio_id: string; raw: { date_time: string } },
+      ticker: string,
+      portfolioMeta: { name?: string },
+      type: string
+    ) => {
+      blankCashSkipCount++;
+      skippedCashLeg.push({
+        row: row.rowNum,
+        ticker,
+        date: row.raw.date_time,
+        portfolio: portfolioMeta.name ?? row.portfolio_id,
+        reason: `cash_value is required for ${type} rows and was blank; the row was not imported.`,
+      });
+    };
 
     // A single multi-row INSERT gives every row the SAME created_at (verified
     // directly against this project's local dev Postgres: `now()` is the
@@ -726,6 +746,14 @@ export async function POST(req: NextRequest) {
         // TIN/TOT by the SAP.DE DIV / ETRO DEP investigation — those are
         // genuine cash movements with exactly the same FX risk.
         const explicitCashValue = raw.cash_value == null ? null : Number(raw.cash_value);
+        // C15: DIV/INT/DEP/WIT/FEE/OTR carry their own signed cash amount.
+        // A blank cash_value must not be replaced by an estimate from
+        // quantity*price+fee (it could have the wrong sign), so the row is
+        // skipped and reported.
+        if (CASH_LEG_TRANSACTION_TYPES.has(type) && explicitCashValue == null) {
+          skipBlankCash(row, base, portfolioMeta, type);
+          continue;
+        }
         // DIV/INT/DEP/WIT/FEE/OTR are genuine cash-impact types: an explicit
         // cash_value's sign (a charge, a refund, or exactly 0) must be
         // trusted as-is, regardless of the asset's settlement currency. BUY
@@ -769,7 +797,7 @@ export async function POST(req: NextRequest) {
         // NOT run through the cash-leg FX gate above: doing so would
         // silently drop a legitimate transfer (units and settle-side cost
         // included) whenever no FX info exists for an amount nothing ever
-        // reads. Formula unchanged from before this fix.
+        // reads. Its cash_value is stored as supplied, blank as null (C15).
         //
         // FXM's cash_value IS the final, signed, portfolio-base-currency
         // amount already — resolveUngatedCashValue passes it through
@@ -777,7 +805,18 @@ export async function POST(req: NextRequest) {
         // src/lib/cashLeg.ts's CASH_LEG_TRANSACTION_TYPES comment for why
         // FXM must never go through the gated branch above instead.
         const cashFromCsv = raw.cash_value == null ? null : Number(raw.cash_value);
-        cash_value = resolveUngatedCashValue(cashFromCsv, quantity, price, fee);
+        if (type === 'FXM') {
+          // C15: FXM's cash_value is required (see above); never estimate it.
+          if (cashFromCsv == null) {
+            skipBlankCash(row, base, portfolioMeta, type);
+            continue;
+          }
+          cash_value = resolveUngatedCashValue(cashFromCsv, quantity, price, fee);
+        } else {
+          // C15: a security transfer moves no cash. Store cash_value exactly as
+          // supplied; a blank stays null rather than an estimate.
+          cash_value = cashFromCsv;
+        }
         cash_ccy = portfolioMeta.currency ?? null;
         cash_fx_to_portfolio = fxrate;
       }
@@ -868,9 +907,16 @@ export async function POST(req: NextRequest) {
       transferResult = { created: [], suggestions: {}, errors: [{ transactionId: 'unknown', error: String(err) }] };
     }
 
-    const skippedNote = skippedCashLeg.length > 0
-      ? ` ${skippedCashLeg.length} row${skippedCashLeg.length > 1 ? 's' : ''} skipped — no reliable currency conversion (see skippedCashLeg).`
-      : '';
+    const conversionSkipCount = skippedCashLeg.length - blankCashSkipCount;
+    const skippedParts = [
+      conversionSkipCount > 0
+        ? `${conversionSkipCount} row${conversionSkipCount > 1 ? 's' : ''} skipped — no reliable currency conversion`
+        : null,
+      blankCashSkipCount > 0
+        ? `${blankCashSkipCount} row${blankCashSkipCount > 1 ? 's' : ''} skipped — required cash_value was blank`
+        : null,
+    ].filter(Boolean);
+    const skippedNote = skippedParts.length > 0 ? ` ${skippedParts.join('; ')} (see skippedCashLeg).` : '';
     const suggestionCount = Object.values(transferResult.suggestions).reduce((n, s) => n + s.length, 0);
     const transferNote = transferResult.created.length > 0
       ? ` ${transferResult.created.length} pending transfer record${transferResult.created.length > 1 ? 's' : ''} recorded` +
