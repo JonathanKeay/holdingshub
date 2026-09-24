@@ -13,7 +13,7 @@
 // Never "fix" a failure here by adjusting the expected number alone.
 //
 // Defect IDs match the HoldingsHub cleanup discovery plan (2026-09-24):
-//   C1  SELL write-time fallback uses |qty*price + fee| (overstates by 2 x fee)
+//   C1  FIXED 2026-09-24: SELL write-time fallback now uses qty*price - fee (net proceeds)
 //   C3  negative DIV/INT/DEP cash_value increases cash (docs/ACCOUNTING.md §15 item 11)
 //   C5  import-time TOT parcel capture ignores earlier resolved TIN parcels
 //   C9  gated row with qty*price+fee = 0 is blocked despite an explicit cash_value
@@ -40,35 +40,87 @@ import { makeTxn, makeHolding, assetMetaFor } from './helpers';
 const KD = 'CURRENT BEHAVIOUR — KNOWN DEFECT';
 
 // ---------------------------------------------------------------------------
-// C1 — SELL write-time fallback amount
+// C1 — FIXED (approved 2026-09-24): BUY/SELL write-time fallback amount
 // ---------------------------------------------------------------------------
-describe(`${KD} C1 (not desired): SELL cash fallback is built from |qty*price + fee|`, () => {
-  // SELL 40 @ 12.00, fee 3.00. True net proceeds = 40*12 - 3 = 477.00.
-  // Callers (import route, manual Add form) always pass settleAbs = |qty*price + fee| = 483.00.
+// Approved rule (docs/ACCOUNTING.md §2, §15 item 12): with no valid positive
+// explicit cash_value, BUY = (G + f) x r and SELL = (G - f) x r, where
+// G = qty*price and r = 1 for same currency; a SELL with G - f <= 0 is
+// BLOCKED. settle_value stays G + f. These markers now assert the fix.
+describe('C1 (fixed): BUY/SELL cash fallback — BUY uses G + fee, SELL uses net proceeds G - fee', () => {
+  // SELL 40 @ 12.00, fee 3.00. Net proceeds = 40*12 - 3 = 477.00; settleAbs stays 483.00.
   const settleAbs = Math.abs(40 * 12 + 3);
 
-  it(`${KD} C1: same-currency SELL with no explicit cash_value stores 483.00, overstating net proceeds (477.00) by 2 x fee`, () => {
+  it('C1: same-currency BUY with no explicit cash_value is unchanged: G + fee', () => {
     const out = resolveCashLeg({ assetCcy: 'GBP', baseCcy: 'GBP', settleAbs, explicitCashValue: null });
     expect(out).toEqual({ status: 'ok', cash_value: 483, cash_ccy: 'GBP', cash_fx_to_portfolio: 1, source: 'same-currency' });
   });
 
-  it(`${KD} C1: cross-currency SELL via explicit fxrate stores (qty*price + fee) x rate, overstating by 2 x fee x rate`, () => {
-    // SELL 10 @ $150, fee $10 on a USD asset in a GBP portfolio, fxrate 0.8.
-    // True net = (1500 - 10) * 0.8 = 1192.00; stored = 1510 * 0.8 = 1208.00.
-    const out = resolveCashLeg({ assetCcy: 'USD', baseCcy: 'GBP', settleAbs: 1510, explicitCashValue: null, explicitFxRate: 0.8 });
+  it('C1: same-currency SELL with no explicit cash_value stores net proceeds 477.00 (G - fee)', () => {
+    const out = resolveCashLeg({ assetCcy: 'GBP', baseCcy: 'GBP', settleAbs, cashBasisAbs: 40 * 12 - 3, explicitCashValue: null });
+    expect(out).toEqual({ status: 'ok', cash_value: 477, cash_ccy: 'GBP', cash_fx_to_portfolio: 1, source: 'same-currency' });
+  });
+
+  it('C1: cross-currency BUY via explicit fxrate is unchanged: (G + fee) x rate', () => {
+    const out = resolveCashLeg({ assetCcy: 'USD', baseCcy: 'GBP', settleAbs: 1502, explicitCashValue: null, explicitFxRate: 0.8 });
     expect(out.status).toBe('ok');
     if (out.status !== 'ok') return;
-    expect(out.cash_value).toBeCloseTo(1208, 10);
+    expect(out.cash_value).toBeCloseTo(1201.6, 10);
+    expect(out.cash_fx_to_portfolio).toBe(0.8);
     expect(out.source).toBe('explicit-fx-rate');
   });
 
-  it(`${KD} C1: cross-currency SELL via cached fx_rates stores (qty*price + fee) x cached rate, with the same overstatement`, () => {
-    // Cached quotes GBPUSD 1.25 -> USD->GBP 0.8.
-    const out = resolveRowCashLeg('USD', 'GBP', 1510, null, null, { GBPUSD: 1.25 });
+  it('C1: cross-currency BUY via cached fx_rates is unchanged: (G + fee) x cached rate', () => {
+    const out = resolveRowCashLeg('USD', 'GBP', 1502, null, null, { GBPUSD: 1.25 });
     expect(out.status).toBe('ok');
     if (out.status !== 'ok') return;
-    expect(out.cash_value).toBeCloseTo(1208, 10);
+    expect(out.cash_value).toBeCloseTo(1201.6, 10);
     expect(out.source).toBe('cached-fx-rate');
+  });
+
+  it('C1: cross-currency SELL via explicit fxrate stores (G - fee) x rate', () => {
+    // SELL 10 @ $150, fee $10 on a USD asset in a GBP portfolio, fxrate 0.8.
+    // Net = (1500 - 10) * 0.8 = 1192.00 (previously 1510 * 0.8 = 1208.00).
+    const out = resolveCashLeg({ assetCcy: 'USD', baseCcy: 'GBP', settleAbs: 1510, cashBasisAbs: 1490, explicitCashValue: null, explicitFxRate: 0.8 });
+    expect(out.status).toBe('ok');
+    if (out.status !== 'ok') return;
+    expect(out.cash_value).toBeCloseTo(1192, 10);
+    expect(out.cash_fx_to_portfolio).toBe(0.8);
+    expect(out.source).toBe('explicit-fx-rate');
+  });
+
+  it('C1: cross-currency SELL via cached fx_rates stores (G - fee) x cached rate', () => {
+    // Cached quotes GBPUSD 1.25 -> USD->GBP 0.8.
+    const out = resolveRowCashLeg('USD', 'GBP', 1510, null, null, { GBPUSD: 1.25 }, false, 1490);
+    expect(out.status).toBe('ok');
+    if (out.status !== 'ok') return;
+    expect(out.cash_value).toBeCloseTo(1192, 10);
+    expect(out.cash_fx_to_portfolio).toBeCloseTo(0.8, 12);
+    expect(out.source).toBe('cached-fx-rate');
+  });
+
+  it('C1: an explicit positive SELL cash_value stays authoritative over the net-proceeds fallback (same and cross currency)', () => {
+    expect(resolveCashLeg({ assetCcy: 'GBP', baseCcy: 'GBP', settleAbs, cashBasisAbs: 477, explicitCashValue: 470 })).toEqual({
+      status: 'ok', cash_value: 470, cash_ccy: 'GBP', cash_fx_to_portfolio: 470 / 483, source: 'explicit-cash-value',
+    });
+    expect(resolveCashLeg({ assetCcy: 'USD', baseCcy: 'GBP', settleAbs: 1510, cashBasisAbs: 1490, explicitCashValue: 1190, explicitFxRate: 0.8 })).toEqual({
+      status: 'ok', cash_value: 1190, cash_ccy: 'GBP', cash_fx_to_portfolio: 1190 / 1510, source: 'explicit-cash-value',
+    });
+  });
+
+  it('C1: a SELL with fee >= G and no explicit cash_value is BLOCKED (same and cross currency)', () => {
+    const reason = 'Net sale proceeds (quantity x price - fee) are not positive and no explicit cash value was supplied.';
+    // fee == G
+    expect(resolveCashLeg({ assetCcy: 'GBP', baseCcy: 'GBP', settleAbs: 20, cashBasisAbs: 0, explicitCashValue: null })).toEqual({ status: 'blocked', reason });
+    // fee > G
+    expect(resolveCashLeg({ assetCcy: 'GBP', baseCcy: 'GBP', settleAbs: 15, cashBasisAbs: -5, explicitCashValue: 0 })).toEqual({ status: 'blocked', reason });
+    expect(resolveRowCashLeg('USD', 'GBP', 15, null, 0.8, undefined, false, -5)).toEqual({ status: 'blocked', reason });
+    expect(resolveRowCashLeg('USD', 'GBP', 15, null, null, { GBPUSD: 1.25 }, false, -5)).toEqual({ status: 'blocked', reason });
+  });
+
+  it('C1: the same fee >= G SELL with an explicit positive cash_value is still accepted as supplied', () => {
+    expect(resolveCashLeg({ assetCcy: 'GBP', baseCcy: 'GBP', settleAbs: 15, cashBasisAbs: -5, explicitCashValue: 1 })).toEqual({
+      status: 'ok', cash_value: 1, cash_ccy: 'GBP', cash_fx_to_portfolio: 1 / 15, source: 'explicit-cash-value',
+    });
   });
 });
 

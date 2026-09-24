@@ -189,10 +189,21 @@ describe('import confirm — same-currency BUY/SELL (GBP asset, GBP portfolio)',
     ]);
   });
 
-  it('CURRENT BEHAVIOUR — KNOWN DEFECT C1 (not desired): SELL with blank cash stores qty*price+fee = 483.00, not net proceeds 477.00', async () => {
+  it('C1 (fixed): SELL with blank cash stores net proceeds qty*price-fee = 477.00; settle_value stays qty*price+fee = 483.00', async () => {
     const { inserted } = await importCsv([gbp({ ticker: 'VOD.L', transaction_type: 'SELL', quantity: 40, price: 12, fee: 3 })]);
     expect(inserted.map(noCreatedAt)).toEqual([
-      expectedRow({ asset_id: 'a-vod', type: 'SELL', quantity: 40, price: 12, fee: 3, cash_value: 483, cash_ccy: 'GBP', settle_value: 483, settle_ccy: 'GBP', cash_fx_to_portfolio: 1 }),
+      expectedRow({ asset_id: 'a-vod', type: 'SELL', quantity: 40, price: 12, fee: 3, cash_value: 477, cash_ccy: 'GBP', settle_value: 483, settle_ccy: 'GBP', cash_fx_to_portfolio: 1 }),
+    ]);
+  });
+
+  it('C1 (fixed): SELL with blank cash and fee >= qty*price is BLOCKED (skippedCashLeg), not given invented cash', async () => {
+    const { body, inserted } = await importCsv([
+      gbp({ ticker: 'VOD.L', transaction_type: 'SELL', quantity: 1, price: 2, fee: 3 }),
+      gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, fee: 0, cash_value: 10 }),
+    ]);
+    expect(inserted.map((r) => r.type)).toEqual(['BUY']);
+    expect(body.skippedCashLeg).toEqual([
+      { row: 2, ticker: 'VOD.L', date: NO_CACHE_DATE, portfolio: 'ISA Account', reason: 'Net sale proceeds (quantity x price - fee) are not positive and no explicit cash value was supplied.' },
     ]);
   });
 });
@@ -213,14 +224,14 @@ describe('import confirm — cross-currency BUY/SELL (USD asset, GBP portfolio)'
     ]);
   });
 
-  it('explicit fxrate with blank cash: cash_value = (qty*price+fee) x rate (SELL: KNOWN DEFECT C1, overstated by 2 x fee x rate)', async () => {
+  it('explicit fxrate with blank cash: BUY cash_value = (qty*price+fee) x rate; SELL (C1 fixed) = (qty*price-fee) x rate', async () => {
     const { inserted } = await importCsv([
       gbp({ ticker: 'AAPL', transaction_type: 'BUY', quantity: 10, price: 150, fee: 2, fxrate: 0.8 }),
       gbp({ ticker: 'AAPL', transaction_type: 'SELL', quantity: 10, price: 150, fee: 10, fxrate: 0.8 }),
     ]);
     expect(inserted.map(noCreatedAt)).toEqual([
       expectedRow({ asset_id: 'a-aapl', type: 'BUY', quantity: 10, price: 150, fee: 2, cash_value: 1502 * 0.8, cash_ccy: 'GBP', settle_value: 1502, settle_ccy: 'USD', cash_fx_to_portfolio: 0.8 }),
-      expectedRow({ asset_id: 'a-aapl', type: 'SELL', quantity: 10, price: 150, fee: 10, cash_value: 1510 * 0.8, cash_ccy: 'GBP', settle_value: 1510, settle_ccy: 'USD', cash_fx_to_portfolio: 0.8 }),
+      expectedRow({ asset_id: 'a-aapl', type: 'SELL', quantity: 10, price: 150, fee: 10, cash_value: 1490 * 0.8, cash_ccy: 'GBP', settle_value: 1510, settle_ccy: 'USD', cash_fx_to_portfolio: 0.8 }),
     ]);
   });
 

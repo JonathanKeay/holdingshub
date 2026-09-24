@@ -51,6 +51,15 @@ export type ResolveCashLegInput = {
   baseCcy: string | null | undefined;
   /** abs(quantity * price + fee), in assetCcy. */
   settleAbs: number;
+  /**
+   * The native (assetCcy) amount the FALLBACK branches below convert when no
+   * valid explicit cash_value exists. Defaults to settleAbs, which is right
+   * for a BUY (commission adds to cost). A SELL caller must pass
+   * abs(quantity * price) - fee (net proceeds; C1, docs/ACCOUNTING.md §2):
+   * if that is <= 0 the row is BLOCKED rather than given invented cash.
+   * Never affects the explicit-cash branches or settle_value.
+   */
+  cashBasisAbs?: number | null;
   /** An explicit cash amount already understood to be in baseCcy, if supplied. */
   explicitCashValue?: number | null;
   /** An explicit assetCcy -> baseCcy rate, if supplied (e.g. a CSV fxrate column). */
@@ -155,12 +164,23 @@ export function resolveCashLeg(input: ResolveCashLegInput): CashLegOutcome {
     };
   }
 
+  // Fallback amount to convert: settleAbs (BUY and every other type) unless
+  // the caller supplied a SELL's net proceeds. A SELL whose fee is >= its
+  // gross value has no positive cash to derive, so it is blocked (C1).
+  const fallbackAbs = input.cashBasisAbs ?? input.settleAbs;
+  if (!isPositiveFinite(fallbackAbs)) {
+    return {
+      status: 'blocked',
+      reason: 'Net sale proceeds (quantity x price - fee) are not positive and no explicit cash value was supplied.',
+    };
+  }
+
   // Same currency: no FX involved at all. Now a true LAST-RESORT fallback —
   // reached only when neither explicit-value branch above produced a usable
-  // amount (e.g. no cash_value was supplied on the CSV row at all). Preserves
-  // exactly the prior settleAbs-based behaviour for that fallback case.
+  // amount (e.g. no cash_value was supplied on the CSV row at all). Uses
+  // fallbackAbs: settleAbs for a BUY, net proceeds for a SELL (C1).
   if (assetCcy === baseCcy) {
-    return { status: 'ok', cash_value: input.settleAbs, cash_ccy: baseCcy, cash_fx_to_portfolio: 1, source: 'same-currency' };
+    return { status: 'ok', cash_value: fallbackAbs, cash_ccy: baseCcy, cash_fx_to_portfolio: 1, source: 'same-currency' };
   }
 
   // 2. An explicit FX rate was supplied — derive the base amount from it.
@@ -168,7 +188,7 @@ export function resolveCashLeg(input: ResolveCashLegInput): CashLegOutcome {
     const rate = input.explicitFxRate;
     return {
       status: 'ok',
-      cash_value: input.settleAbs * rate,
+      cash_value: fallbackAbs * rate,
       cash_ccy: baseCcy,
       cash_fx_to_portfolio: rate,
       source: 'explicit-fx-rate',
@@ -180,7 +200,7 @@ export function resolveCashLeg(input: ResolveCashLegInput): CashLegOutcome {
     const rate = input.cachedRateAssetToBase;
     return {
       status: 'ok',
-      cash_value: input.settleAbs * rate,
+      cash_value: fallbackAbs * rate,
       cash_ccy: baseCcy,
       cash_fx_to_portfolio: rate,
       source: 'cached-fx-rate',
@@ -290,7 +310,8 @@ export function resolveRowCashLeg(
   explicitCashValue: number | null,
   explicitFxRate: number | null,
   quotesForDate: Record<string, number> | undefined,
-  allowSignedExplicitCash: boolean = false
+  allowSignedExplicitCash: boolean = false,
+  cashBasisAbs: number | null = null
 ): CashLegOutcome {
   // Only attempt the cache when there's no USABLE explicit rate — a CSV
   // fxrate of 0 (this fix's whole trigger case: the eToro CAKE/SAP.DE rows)
@@ -312,6 +333,7 @@ export function resolveRowCashLeg(
     explicitFxRate,
     cachedRateAssetToBase,
     allowSignedExplicitCash,
+    cashBasisAbs,
   });
 }
 

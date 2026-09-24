@@ -378,6 +378,8 @@ function TransactionsPageInner() {
       explicitCashValue,
       explicitFxRate,
       cachedRateAssetToBase,
+      // C1: a SELL's fallback cash is net proceeds (gross - fee), not settle_value.
+      cashBasisAbs: newTx.type === 'SELL' ? Math.abs(qty * price) - fee : null,
     });
 
     if (cashLeg.status === 'blocked') {

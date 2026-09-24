@@ -739,7 +739,9 @@ export async function POST(req: NextRequest) {
           explicitCashValue,
           fxrate,
           fxQuotesByDate[raw.date_time],
-          allowSignedExplicitCash
+          allowSignedExplicitCash,
+          // C1: a SELL's fallback cash is net proceeds (gross - fee), not settle_value.
+          type === 'SELL' ? Math.abs(quantity * price) - fee : null
         );
 
         if (cashLeg.status === 'blocked') {

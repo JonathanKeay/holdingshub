@@ -6,7 +6,7 @@
 |---|---|
 | **Document version** | 1.1 |
 | **Date** | 2026-09-24 |
-| **Status** | Validated after IBKR PROD reconciliation (v1.0, 2026-09-23). Amended in v1.1 with findings from Phase 0 characterisation testing. **v1.1 is a documentation amendment only: no accounting behaviour, application code, schema or data was changed.** |
+| **Status** | Validated after IBKR PROD reconciliation (v1.0, 2026-09-23). Amended in v1.1 with findings from Phase 0 characterisation testing. **v1.1 is a documentation amendment only: no accounting behaviour, application code, schema or data was changed.** Later amendment (2026-09-24): the approved C1 fix corrects the BUY/SELL write-time cash fallback for SELLs (§2, §15 item 12); no stored data was changed. |
 | **Scope** | Describes what HoldingsHub's implementation actually does today, as established by reading the source code and the automated test suite — not what an investment application "ought" to do |
 | **Author** | Produced via code-level audit; no application code, schema, migrations, tests, calculations, or PROD data were modified in producing this document |
 
@@ -78,7 +78,7 @@ A row's downstream treatment is governed by four sets, all defined in `src/lib/q
 | Effect | Behaviour |
 |---|---|
 | Quantity | `total_shares -= qty` |
-| Cash | Increases cash by `abs(cash_value)` in `cash_ccy`. The write-time fallbacks overstate a SELL by 2 × fee (§2). Only if the stored value is NULL does the cash calculation use `qty*price-fee` in the asset currency (§8) |
+| Cash | Increases cash by `abs(cash_value)` in `cash_ccy`. Without a valid explicit value, the write-time fallback stores net proceeds `(qty*price - fee) × rate` (§2, C1 fixed). Only if the stored value is NULL does the cash calculation use `qty*price-fee` in the asset currency (§8) |
 | Cost basis | Proportional removal: `costOut = total_cost * (qty / total_shares_before)` |
 | Realised cost | `realised_cost += costBasisCash` (cost basis converted to proceeds currency via the SELL row's own implied FX if currencies differ) |
 | Realised P&L | `realised_value += proceedsAmount - costBasisCash` |
@@ -211,18 +211,21 @@ Mirror of the cash TIN: no holdings effect, cash effect only (`cash[ccy] -= abs(
       -> OK, cash_value = explicitCashValue exactly as supplied
 3. explicitCashValue is POSITIVE finite?
       -> OK, cash_value = explicitCashValue (magnitude only)
+3a. fallbackAbs = cashBasisAbs ?? settleAbs  (SELL callers pass |qty*price| - fee)
+      fallbackAbs is not a positive finite value? -> BLOCKED (SELL with fee >= qty*price)
 4. assetCcy === baseCcy?
-      -> OK, cash_value = settleAbs (same-currency fallback — TRUE LAST RESORT)
+      -> OK, cash_value = fallbackAbs (same-currency fallback — TRUE LAST RESORT)
 5. explicitFxRate is POSITIVE finite?
-      -> OK, cash_value = settleAbs * explicitFxRate
+      -> OK, cash_value = fallbackAbs * explicitFxRate
 6. cachedRateAssetToBase (from fx_rates table, that trade date) is POSITIVE finite?
-      -> OK, cash_value = settleAbs * cachedRateAssetToBase
+      -> OK, cash_value = fallbackAbs * cachedRateAssetToBase
 7. Nothing usable -> BLOCKED (row is skipped, reported in skippedCashLeg)
 ```
 
 Notes on the steps:
 
-- `settleAbs` is always `|quantity × price + fee|`, computed by the caller for **every** gated type, SELL included. It is never net proceeds.
+- `settleAbs` is always `|quantity × price + fee|`, computed by the caller for **every** gated type, SELL included. It is never net proceeds. It is still used for step 1 and for `cash_fx_to_portfolio` on the explicit-value steps 2–3, and `settle_value` is still stored as `quantity × price + fee`.
+- `fallbackAbs` (C1 fix, 2026-09-24) is the amount steps 4–6 convert. It equals `settleAbs` for every type except SELL. For a SELL, both callers (import route and manual Add form) pass `cashBasisAbs = |quantity × price| − fee`, the net proceeds. A SELL with `fee ≥ quantity × price` and no strictly positive explicit `cash_value` is BLOCKED at step 3a.
 - Step 1 runs before any explicit-value step. A gated row whose `quantity × price + fee` is zero is therefore BLOCKED even when it carries a valid explicit `cash_value`.
 - For BUY/SELL and `CASH.*` TIN/TOT, step 3 accepts only a strictly positive value. A blank, zero or negative explicit `cash_value` is ignored, and the row falls through to steps 4–7.
 - The cached rate (step 6) is used only when `explicitCashValue` is **null** and no positive `fxrate` was supplied. What counts as null depends on the entry path:
@@ -248,12 +251,15 @@ This exact ordering is the outcome of **three separate fixes made during the IBK
 
 The commission is added to cost on a **BUY** (`quantity*price + fee`) and deducted from proceeds on a **SELL** (`quantity*price - fee`).
 
-The write-time fallback does not apply that asymmetry. `settleAbs` is always `|quantity*price + fee|`, whatever the type. That is correct for a BUY. For a SELL it is wrong by exactly `2 × fee`: the fee is added where it should have been subtracted. The error appears in **every** SELL fallback that starts from `settleAbs`:
+Since the C1 fix (2026-09-24), the write-time fallback applies that asymmetry. With no strictly positive explicit `cash_value`, and with `G = quantity × price` and `r` = the explicit FX rate, else the cached rate, else 1 for same currency:
 
-- same-currency (step 4): `cash_value = qty*price + fee`, overstated by `2 × fee`;
-- explicit FX (step 5) and cached FX (step 6): `cash_value = (qty*price + fee) × rate`, overstated by `2 × fee × rate`.
+- BUY: `cash_value = (G + fee) × r` (unchanged);
+- SELL: `cash_value = (G − fee) × r`, the net proceeds;
+- SELL with `G − fee ≤ 0`: BLOCKED, rather than inventing a positive cash amount.
 
-The third fix does not change these fallbacks. It makes sure a strictly positive explicit `cash_value` is used **before** any of them. A SELL is therefore correct only when a positive explicit `cash_value` (net proceeds, in base currency) is supplied. There is no separate "double-fee" defence elsewhere. The read-time fallback in `calculateCashBalancesMulti` (`qty*price - fee`, §8) does have the correct sign. However, it is reached only when the stored `cash_value` is NULL, which the import route never produces for BUY/SELL. The `mirror_settle_to_cash` trigger also fills a NULL `cash_value` from `settle_value` (`qty*price + fee`) whenever `settle_value` is present.
+A strictly positive explicit `cash_value` is still used **before** any fallback, exactly as before. `settle_value` keeps its meaning (`G + fee`).
+
+*History:* before the fix, every SELL fallback started from `settleAbs = |G + fee|`, so it overstated net proceeds by exactly `2 × fee` (× rate): e.g. SELL 40 @ £12, fee £3 stored £483 instead of £477; SELL 10 @ $150, fee $10 at 0.8 stored £1,208 instead of £1,192. The third fix only ensured a positive explicit value was used before those fallbacks. The read-time fallback in `calculateCashBalancesMulti` (`qty*price - fee`, §8) does have the correct sign. However, it is reached only when the stored `cash_value` is NULL, which the import route never produces for BUY/SELL. The `mirror_settle_to_cash` trigger also fills a NULL `cash_value` from `settle_value` (`qty*price + fee`) whenever `settle_value` is present.
 
 ---
 
@@ -597,10 +603,10 @@ The importer (`src/app/api/import-transactions/route.ts`) is responsible for:
 
 For every gated cash-moving type, a usable explicit `cash_value` is the field that most determines correctness. The importer treats `cash_value` as already being in the portfolio's base currency and reads no `cash_ccy` column. For DIV/INT/DEP/WIT/FEE/OTR, **any** explicit value is used, including a blank, which arrives and is stored as `0` (C15). For BUY/SELL and `CASH.*` TIN/TOT, only a strictly positive value is used. Without one, these fall back as follows:
 
-1. **Same currency** (asset ccy = base ccy): `cash_value = |qty*price + fee|`.
-2. **Cross currency**: a positive `fxrate` × `|qty*price + fee|`; otherwise the row is BLOCKED and not imported. (`resolveCashLeg` has a cached-`fx_rates` step, but CSV import cannot reach it — C15.)
+1. **Same currency** (asset ccy = base ccy): BUY `cash_value = qty*price + fee`; SELL `cash_value = qty*price − fee`.
+2. **Cross currency**: a positive `fxrate` × the same amount (BUY `qty*price + fee`, SELL `qty*price − fee`); otherwise the row is BLOCKED and not imported. (`resolveCashLeg` has a cached-`fx_rates` step, but CSV import cannot reach it — C15.)
 
-For a SELL, both fallbacks overstate net proceeds by `2 × fee` (× rate when cross-currency) (§2, §15 item 12, C1). For signed-flag types, a blank `cash_value` imports as `0`: the row is accepted with **no cash effect and no warning** (C15). Nothing warns about either case at import time.
+A SELL whose fee is at least `qty*price` and which has no positive `cash_value` is BLOCKED (§2, §15 item 12, C1 fixed). For signed-flag types, a blank `cash_value` imports as `0`: the row is accepted with **no cash effect and no warning** (C15). Nothing warns about this at import time.
 
 ---
 
@@ -700,7 +706,7 @@ Destination holding (portfolio B, same asset, empty before this TIN): `applyTran
 2. **BUY/SELL no-explicit-cash fallback — coverage exists at the cash-leg unit level, not in the read-time cash calculation.** Neither the BUY nor the SELL fallback inside `calculateCashBalancesMulti` has a test (no test found). `cash-leg.spec.ts` (79 tests in total, covering all of `resolveCashLeg`) tests the write-time fallbacks in isolation. `tests/financial/current-behaviour.positions.spec.ts`'s T1 BUY test does not supply an explicit `cash_value` and exercises the `qty*price+fee` fallback for **cost basis** only. The read-time fallback is also largely shadowed: the import route never stores a NULL `cash_value` for BUY/SELL, and the `mirror_settle_to_cash` trigger fills NULLs from `settle_value`. Flagged as a coverage gap, not a confirmed defect — the third cash-leg fix's own investigation found every real same-currency BUY row in the six-year IBKR dataset already numerically identical either way. *Update 2026-09-24:* `tests/financial/cash-parity.spec.ts` now covers the NULL-`cash_value` BUY and SELL fallbacks in both cash engines.
 
 3. **Manual Add/Edit transaction paths.**
-   - The manual **Add** form (`src/app/transactions/page.tsx`, `handleCreate`) is genuinely restricted to BUY/SELL only (`<select>` hardcoded to those two options, TypeScript-typed `'BUY'|'SELL'`), so its `resolveCashLeg` call omits `allowSignedExplicitCash`. Leaving out the signed flag is correct. However, the Add form lets a user save a same-currency SELL with a blank `cash_value`, and that is stored as `qty*price+fee`: the 2 × fee overstatement (§2), live today through the UI. The form calls `resolveCashLeg` directly, not `resolveRowCashLeg`, and its cache-lookup condition differs slightly (`explicitFxRate == null` rather than a positive-rate check).
+   - The manual **Add** form (`src/app/transactions/page.tsx`, `handleCreate`) is genuinely restricted to BUY/SELL only (`<select>` hardcoded to those two options, TypeScript-typed `'BUY'|'SELL'`), so its `resolveCashLeg` call omits `allowSignedExplicitCash`. Leaving out the signed flag is correct. A SELL saved with a blank `cash_value` is stored as net proceeds `qty*price − fee` (× rate), or BLOCKED if that is not positive (C1 fixed 2026-09-24; before the fix it was stored as `qty*price+fee`, a 2 × fee overstatement). The form calls `resolveCashLeg` directly, not `resolveRowCashLeg`, and its cache-lookup condition differs slightly (`explicitFxRate == null` rather than a positive-rate check).
    - The manual **Edit** path (`handleSaveEdit`) performs a **direct `transactions.update()` with whatever the edit form supplied**, with **no call to `resolveCashLeg` and no re-validation of `cash_value`/`settle_value` consistency at all**. A user editing `cash_value`, `price`, `quantity`, `fee`, or `type` through this UI bypasses every cash-leg safety rule documented in §2. This is a real, live gap — not exercised by the IBKR PROD reconciliation (which only used the import route) and not covered by any test found in this audit. Edit also never recalculates `settle_value`. Changing a BUY's quantity or price leaves native cost basis based on the old `settle_value`. The Edit type list offers BAL but not FXM, and the `mirror_settle_to_cash` trigger fires on UPDATE as well as INSERT.
 
 4. **Duplicate/legacy cash calculation implementations.** Two live implementations exist (§8): `calculateCashBalancesMulti` and `applyCashTxn` (duplicated; branch logic matches. `tests/financial/cash-parity.spec.ts` compares the two across every materially distinct branch and pins their structural differences — see §8). A third, dead `calculateCashBalancesISA_GBP` (zero call sites, with an inert BAL sign-handling divergence), was removed in Phase 1 Batch 1 (commit `a93c858`). Also, `src/app/api/portfolio-series/route.ts` has its own share-count replay (`applyHoldingTxn`). It uses no 6 dp rounding and no `1e-6` snap. The live duplicates have not been consolidated.
@@ -719,7 +725,7 @@ Destination holding (portfolio B, same asset, empty before this TIN): `applyTran
 
 11. **Latent sign issue: negative DIV/INT/DEP values increase cash.** For DIV, INT and DEP, `resolveCashLeg` stores a negative explicit `cash_value` exactly as supplied (signed-explicit path, §2), but `calculateCashBalancesMulti` and `applyCashTxn` add `abs(cash_value)`. A negative dividend or interest adjustment, or a negative deposit, would therefore *increase* cash instead of reducing it. (WIT and FEE are unaffected in direction because they always subtract `abs(cash_value)`.) `tests/financial/cash-leg.spec.ts` asserts only that the negative value is stored ("negative-adjustment INT"); no test covers its cash effect. A read-only query of the DEV database (2026-09-24) found **zero** negative DIV/INT/DEP/WIT/FEE rows, so this has no effect on current data. It is a latent defect for future imports (for example, broker debit interest or dividend reversals). Not fixed; the current behaviour is frozen pending an approved decision.
 
-12. **SELL cash fallback overstated by twice the fee (C1).** When a SELL has no strictly positive explicit `cash_value`, `resolveCashLeg` builds its fallback from `settleAbs = |qty × price + fee|`. Same-currency, it stores `qty × price + fee`; cross-currency, `(qty × price + fee) × rate`. Net proceeds are `qty × price − fee`, so the stored value is overstated by `2 × fee` (× rate). This applies to CSV import (where a blank `cash_value` arrives as `0` and is ignored, so the fallback applies) and to the manual Add form. No warning is given. Pinned as CURRENT behaviour in `tests/financial/known-defects.characterisation.spec.ts` and `tests/import/import-route.characterisation.spec.ts`. Not fixed.
+12. **SELL cash fallback overstated by twice the fee (C1). FIXED 2026-09-24.** When a SELL had no strictly positive explicit `cash_value`, `resolveCashLeg` built its fallback from `settleAbs = |qty × price + fee|`: same-currency `qty × price + fee`, cross-currency `(qty × price + fee) × rate`. Net proceeds are `qty × price − fee`, so the stored value was overstated by `2 × fee` (× rate), on CSV import and in the manual Add form. **Approved rule, now implemented:** a strictly positive explicit `cash_value` stays authoritative; otherwise BUY = `(G + fee) × r` and SELL = `(G − fee) × r` (`G = qty × price`, `r` = explicit FX rate, else cached rate, else 1 for same currency); a SELL with `G − fee ≤ 0` is BLOCKED. `settle_value` stays `G + fee`. Implemented via an optional `cashBasisAbs` input to `resolveCashLeg`/`resolveRowCashLeg`, passed for SELL by the import route and the manual Add form. The change is write-time only: stored rows are not rewritten, and the manual Edit path is unchanged (item 3). Asserted in `tests/financial/known-defects.characterisation.spec.ts` (C1 block) and `tests/import/import-route.characterisation.spec.ts`.
 
 13. **Import-time transfer parcel capture ignores earlier resolved transfers (C5).** `captureTransferOutsForGroup` (`src/lib/transferImportIntegration.ts`) replays the source holding with plain `applyTransactionToHolding`, not the transfer-aware dispatch. If that holding earlier received a resolved (`matched`/`external_in`) TIN, the replay uses that TIN's legacy cost (`quantity × price + fee`) instead of its frozen parcel, so a later TOT's captured `native_cost` can differ from the cost the live engine holds. The capture replay also never sets `base_currency`, so parcels captured at import never carry `base_cost`. This is a genuine latent defect for future chained transfers (A→B→C). It did not affect the IBKR reconciliation (see "Effect on the IBKR reconciliation" below). Pinned as CURRENT behaviour in `tests/financial/known-defects.characterisation.spec.ts`. Not fixed.
 
@@ -760,7 +766,7 @@ The cleanup work uses C-IDs; this section uses item numbers. They map as follows
 
 | C-ID | §15 item | Note |
 |---|---|---|
-| C1 | 12 | |
+| C1 | 12 | Fixed 2026-09-24 |
 | C2 | 3 | Manual Add/Edit |
 | C3 | 11 | |
 | C4 | 1 | FEE on a security |
