@@ -29,6 +29,11 @@
 //   - security TIN/TOT with a blank cash_value store null (no cash amount is
 //     invented for a non-cash transfer); settle_value is unchanged;
 //   - cash_fx_to_portfolio stores null, not 0, where a blank CSV fxrate is copied.
+//
+// C16 (FIXED 2026-09-24): when at least one row imports, the success response
+// reports rows dropped by validation or portfolio matching in rejectedRows, and
+// 'GBP' placeholder rows in ignoredRows, with counts in the message. Reporting
+// only: which rows import is unchanged. See the "C16" describe block below.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createImportFake, confirmRequest, toCsv, type Row } from './importRouteHarness';
@@ -616,18 +621,103 @@ describe('import confirm — parsing and row filtering', () => {
       ['OTR', -1],
     ]);
   });
+});
 
-  it('CURRENT behaviour: rows that fail validation or portfolio matching (including another user\'s portfolio) are dropped, and the SUCCESS response does not report them', async () => {
+// ---------------------------------------------------------------------------
+// C16 (FIXED 2026-09-24): rejected and ignored rows are reported on success.
+// Reporting only: which rows import, reject or are ignored is unchanged.
+// ---------------------------------------------------------------------------
+
+describe('import confirm — C16: rejected and ignored rows are reported in the success response', () => {
+  const INVALID_TYPE = 'Invalid transaction_type';
+  const IGNORED_REASON = "'GBP' cash placeholder row; ignored, not imported.";
+
+  it('valid rows still import; rows failing validation or portfolio matching (including another user\'s portfolio) are reported in rejectedRows with row number and reason; a GBP placeholder is ignored, not rejected', async () => {
     const { status, body, inserted } = await importCsv([
       gbp({ ticker: 'VOD.L', transaction_type: 'bogus', quantity: 1, price: 10, cash_value: 10 }),
       { portfolio: 'Someone Else', date_time: NO_CACHE_DATE, ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, cash_value: 10 },
-      gbp({ ticker: 'GBP', transaction_type: 'DEP', quantity: 1, price: 10, cash_value: 10 }), // 'GBP' placeholder rows are skipped outright
+      gbp({ ticker: 'GBP', transaction_type: 'DEP', quantity: 1, price: 10, cash_value: 10 }),
       gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, fee: 0, cash_value: 10 }),
     ]);
     expect(status).toBe(200);
     expect(inserted).toHaveLength(1);
-    expect(inserted[0]).toMatchObject({ portfolio_id: 'p-gbp', type: 'BUY' });
-    expect(body.message).toBe('Imported 1 transaction.');
-    expect(Object.keys(body).sort()).toEqual(['message', 'skippedCashLeg', 'transferResult']);
+    expect(inserted[0]).toMatchObject({ portfolio_id: 'p-gbp', type: 'BUY', asset_id: 'a-vod' });
+    expect(body.rejectedRows).toEqual([
+      { row: 2, reason: INVALID_TYPE },
+      // Same wording as the preview: it does not reveal that another user owns a portfolio of that name.
+      { row: 3, reason: "No matching portfolio for 'Someone Else'" },
+    ]);
+    expect(body.ignoredRows).toEqual([{ row: 4, reason: IGNORED_REASON }]);
+    expect(body.skippedCashLeg).toEqual([]);
+    expect(body.message).toBe(
+      "Imported 1 transaction. 2 rows rejected — failed validation or portfolio matching (see rejectedRows). 1 'GBP' placeholder row ignored (see ignoredRows).",
+    );
+    expect(Object.keys(body).sort()).toEqual(['ignoredRows', 'message', 'rejectedRows', 'skippedCashLeg', 'transferResult']);
+  });
+
+  it('a row with several validation issues is one rejected row whose reasons are joined with "; "', async () => {
+    const { body, inserted } = await importCsv([
+      gbp({ ticker: 'VOD.L', transaction_type: 'bogus', date_time: 'not-a-date', quantity: 1, price: 10, cash_value: 10 }),
+      gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, cash_value: 10 }),
+    ]);
+    expect(inserted).toHaveLength(1);
+    expect(body.rejectedRows).toEqual([{ row: 2, reason: `${INVALID_TYPE}; Invalid date_time: not-a-date` }]);
+  });
+
+  it('singular and plural wording: one rejected row and several ignored placeholders', async () => {
+    const { body } = await importCsv([
+      gbp({ ticker: 'VOD.L', transaction_type: 'bogus', quantity: 1, price: 10, cash_value: 10 }),
+      gbp({ ticker: 'GBP', transaction_type: 'DEP', quantity: 1, price: 10, cash_value: 10 }),
+      gbp({ ticker: 'gbp', transaction_type: 'WIT', quantity: 1, price: 5, cash_value: 5 }),
+      gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, cash_value: 10 }),
+      gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 2, price: 10, cash_value: 20 }),
+    ]);
+    expect(body.message).toBe(
+      "Imported 2 transactions. 1 row rejected — failed validation or portfolio matching (see rejectedRows). 2 'GBP' placeholder rows ignored (see ignoredRows).",
+    );
+    expect(body.ignoredRows.map((r: any) => r.row)).toEqual([3, 4]);
+  });
+
+  it('singular and plural wording: several rejected rows and one ignored placeholder', async () => {
+    const { body } = await importCsv([
+      gbp({ ticker: 'VOD.L', transaction_type: 'bogus', quantity: 1, price: 10, cash_value: 10 }),
+      { portfolio: 'Nonexistent', date_time: NO_CACHE_DATE, ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, cash_value: 10 },
+      gbp({ ticker: 'VOD.L', transaction_type: 'BUY', date_time: 'bad', quantity: 1, price: 10, cash_value: 10 }),
+      gbp({ ticker: 'GBP', transaction_type: 'DEP', quantity: 1, price: 10, cash_value: 10 }),
+      gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, cash_value: 10 }),
+    ]);
+    expect(body.message).toBe(
+      "Imported 1 transaction. 3 rows rejected — failed validation or portfolio matching (see rejectedRows). 1 'GBP' placeholder row ignored (see ignoredRows).",
+    );
+    expect(body.rejectedRows.map((r: any) => r.row)).toEqual([2, 3, 4]);
+  });
+
+  it('no rejected or ignored rows: the message is exactly the existing simple success message, and both lists are empty', async () => {
+    const { body } = await importCsv([
+      gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, cash_value: 10 }),
+      gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 2, price: 10, cash_value: 20 }),
+    ]);
+    expect(body.message).toBe('Imported 2 transactions.');
+    expect(body.rejectedRows).toEqual([]);
+    expect(body.ignoredRows).toEqual([]);
+  });
+
+  it('mixed rejectedRows, ignoredRows and skippedCashLeg: each is reported separately and accurately, and only the valid row imports', async () => {
+    const { status, body, inserted } = await importCsv([
+      gbp({ ticker: 'VOD.L', transaction_type: 'bogus', quantity: 1, price: 10, cash_value: 10 }), // rejected
+      gbp({ ticker: 'AAPL', transaction_type: 'BUY', quantity: 10, price: 150, fee: 2 }), // no usable FX -> skippedCashLeg
+      gbp({ ticker: 'CASH.GBP', transaction_type: 'OTR', quantity: 1, price: 1 }), // blank required cash -> skippedCashLeg
+      gbp({ ticker: 'GBP', transaction_type: 'DEP', quantity: 1, price: 10, cash_value: 10 }), // ignored placeholder
+      gbp({ ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, cash_value: 10 }), // imported
+    ]);
+    expect(status).toBe(200);
+    expect(inserted.map((r) => [r.asset_id, r.type])).toEqual([['a-vod', 'BUY']]);
+    expect(body.rejectedRows).toEqual([{ row: 2, reason: INVALID_TYPE }]);
+    expect(body.ignoredRows).toEqual([{ row: 5, reason: IGNORED_REASON }]);
+    expect(body.skippedCashLeg.map((s: any) => s.row)).toEqual([3, 4]);
+    expect(body.message).toBe(
+      "Imported 1 transaction. 1 row rejected — failed validation or portfolio matching (see rejectedRows). 1 'GBP' placeholder row ignored (see ignoredRows). " +
+      '1 row skipped — no reliable currency conversion; 1 row skipped — required cash_value was blank (see skippedCashLeg).',
+    );
   });
 });

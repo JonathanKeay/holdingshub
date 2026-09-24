@@ -317,6 +317,9 @@ export async function POST(req: NextRequest) {
 
     const cleaned: Array<{ raw: any; portfolio_id: string; asset_id: string | null; rowNum: number }> = [];
     const errors: any[] = [];
+    // C16: 'GBP' cash placeholder rows are ignored, not rejected. Recorded
+    // only so the confirm-stage success response can report them.
+    const ignoredRows: { row: number; reason: string }[] = [];
     const seenNewTickers = new Set<string>();
 
     // Validate + normalize input rows
@@ -327,7 +330,10 @@ export async function POST(req: NextRequest) {
 
         const tickerRaw = getField(row, 'ticker') ?? getField(row, 'symbol') ?? '';
         const ticker = normalizeTicker(tickerRaw);
-        if (ticker === 'GBP') continue; // ignore cash placeholder rows if they exist
+        if (ticker === 'GBP') { // ignore cash placeholder rows if they exist
+          ignoredRows.push({ row: rowNum, reason: "'GBP' cash placeholder row; ignored, not imported." });
+          continue;
+        }
 
         // Normalization: read cash_value header only (remove fallback to settle_value)
         const normalized = {
@@ -917,6 +923,19 @@ export async function POST(req: NextRequest) {
         : null,
     ].filter(Boolean);
     const skippedNote = skippedParts.length > 0 ? ` ${skippedParts.join('; ')} (see skippedCashLeg).` : '';
+    // C16: rows dropped by validation or portfolio matching are reported with
+    // the same reason text the preview shows. Reporting only; which rows
+    // import is unchanged.
+    const rejectedRows = errors.map((e) => ({
+      row: e.row as number,
+      reason: (e.issues ?? []).map((iss: any) => iss?.message ?? JSON.stringify(iss)).join('; '),
+    }));
+    const rejectedNote = rejectedRows.length > 0
+      ? ` ${rejectedRows.length} row${rejectedRows.length > 1 ? 's' : ''} rejected — failed validation or portfolio matching (see rejectedRows).`
+      : '';
+    const ignoredNote = ignoredRows.length > 0
+      ? ` ${ignoredRows.length} 'GBP' placeholder row${ignoredRows.length > 1 ? 's' : ''} ignored (see ignoredRows).`
+      : '';
     const suggestionCount = Object.values(transferResult.suggestions).reduce((n, s) => n + s.length, 0);
     const transferNote = transferResult.created.length > 0
       ? ` ${transferResult.created.length} pending transfer record${transferResult.created.length > 1 ? 's' : ''} recorded` +
@@ -927,8 +946,10 @@ export async function POST(req: NextRequest) {
       : '';
 
     return NextResponse.json(safe({
-      message: `Imported ${finalRows.length} transaction${finalRows.length > 1 ? 's' : ''}.${skippedNote}${transferNote}${transferErrorNote}`,
+      message: `Imported ${finalRows.length} transaction${finalRows.length > 1 ? 's' : ''}.${rejectedNote}${ignoredNote}${skippedNote}${transferNote}${transferErrorNote}`,
       skippedCashLeg,
+      rejectedRows,
+      ignoredRows,
       transferResult,
     }));
   } catch (err: any) {
