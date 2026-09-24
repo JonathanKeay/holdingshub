@@ -6,6 +6,7 @@ import { DateTime } from 'luxon';
 import { createClient } from '@supabase/supabase-js';
 import { resolveRowCashLeg, shouldApplyCashLegGate, resolveUngatedCashValue, CASH_LEG_TRANSACTION_TYPES } from '@/lib/cashLeg';
 import { findUnresolvedTickerRows } from '@/lib/unresolvedTickers';
+import { indexPortfoliosByName, matchPortfolioByName } from '@/lib/portfolioNameMatch';
 import { splitTickersForLookup } from '@/lib/newTickerLookupCap';
 import {
   filterTickersNeedingCreation,
@@ -183,14 +184,6 @@ function normalizeNameForLookup(v?: string) {
     .toLowerCase();
 }
 
-function alnumNormalize(name: string) {
-  return stripHidden(name).replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-}
-
-function canon12(name: string) {
-  return alnumNormalize(name).slice(0, 12);
-}
-
 // ---------- Route handler ----------
 export async function POST(req: NextRequest) {
   try {
@@ -264,7 +257,7 @@ export async function POST(req: NextRequest) {
     // portfolio by name-guessing. `assets` and `asset_aliases` are shared
     // reference data and are deliberately NOT scoped by user.
     const [portfoliosResult, assetsResult, assetAliasesResult] = await Promise.all([
-      supabase.from('portfolios').select('id, name, base_currency').eq('user_id', session.user.id),
+      supabase.from('portfolios').select('id, name, base_currency, import_name').eq('user_id', session.user.id),
       // include resolved_ticker so we can match CSVs against both ticker and resolved_ticker
       supabase.from('assets').select('id, ticker, currency, status, resolved_ticker'),
       supabase.from('asset_aliases').select('alias, asset_id'),
@@ -298,20 +291,9 @@ export async function POST(req: NextRequest) {
     }
     const { portfolios, assets, aliases } = referenceData;
 
-    // Build index for preview display and tolerant name lookups
-    const portfoliosByNormalized = Object.fromEntries(
-      (portfolios ?? []).map((p) => [
-        normalizeNameForLookup(p.name),
-        {
-          id: p.id,
-          name: p.name,
-          // Preserve original field for type compatibility
-          base_currency: (p as any).base_currency ?? null,
-          // Also expose as `currency` for downstream convenience
-          currency: (p as any).base_currency ?? null,
-        },
-      ])
-    );
+    // C18: the user's own portfolios, keyed by trimmed, lower-cased effective
+    // import name (import_name when set, else the display name).
+    const portfoliosByName = indexPortfoliosByName<{ id: string; name: string | null; import_name?: string | null }>(portfolios ?? []);
     const availablePortfolios = (portfolios ?? []).map((p) => ({
       id: p.id,
       name: p.name,
@@ -364,36 +346,20 @@ export async function POST(req: NextRequest) {
 
         const parsed = result.data;
 
-        // Strong alnum-12 matching first
-        const inputAlnum12 = canon12(parsed.portfolio);
-        let portfolioMatch =
-          (portfolios ?? []).find((p) => canon12(p.name) === inputAlnum12) || null;
-
-        // Fallback: tolerant contains/startsWith match on alnum-normalized
-        if (!portfolioMatch) {
-          const portfolioAlnum = alnumNormalize(parsed.portfolio);
-          portfolioMatch =
-            Object.values(portfoliosByNormalized).find((p) => {
-              const pn = alnumNormalize(p.name);
-              return (
-                pn === portfolioAlnum ||
-                pn.startsWith(portfolioAlnum) || portfolioAlnum.startsWith(pn) ||
-                pn.includes(portfolioAlnum) || portfolioAlnum.includes(pn)
-              );
-            }) || null;
-        }
-
-        // Legacy: match by first 12 alnum chars again (explicit)
-        if (!portfolioMatch && parsed.portfolio) {
-          const in12 = canon12(parsed.portfolio);
-          portfolioMatch =
-            Object.values(portfoliosByNormalized).find((p) => canon12(p.name) === in12) || null;
-        }
-
-        if (!portfolioMatch) {
+        // C18: exact match on the portfolio's one effective import name,
+        // ignoring only surrounding whitespace and letter case. No
+        // substring/prefix/similar-name fallback. See
+        // src/lib/portfolioNameMatch.ts.
+        const nameMatch = matchPortfolioByName(parsed.portfolio, portfoliosByName);
+        if (nameMatch.status === 'none') {
           errors.push({ row: rowNum, issues: [{ message: `No matching portfolio for '${normalized.portfolio}'` }] });
           continue;
         }
+        if (nameMatch.status === 'ambiguous') {
+          errors.push({ row: rowNum, issues: [{ message: `Portfolio name '${normalized.portfolio}' matches more than one of your portfolios; rename them so each name is unique` }] });
+          continue;
+        }
+        const portfolioMatch = nameMatch.portfolio;
 
         // C17: an SPL ratio (the CSV quantity) must be > 0. Reported as an
         // invalid row at preview; at confirm it refuses the whole import

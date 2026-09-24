@@ -39,6 +39,13 @@
 // is invalid input. Preview reports it as an invalid row; confirm refuses the
 // WHOLE import with HTTP 400 naming the rows, before any write (no asset
 // creation, no transactions). See the "C17" describe block below.
+//
+// C18 (FIXED 2026-09-24): a CSV portfolio name matches one of the user's own
+// portfolios only when it equals that portfolio's one effective import name
+// (import_name when set, else the display name), trimmed and case-insensitive.
+// The substring/prefix/first-12-characters fallbacks are gone. An unmatched or
+// ambiguous name is a rejected row. See the "C18" describe block below and
+// tests/import/portfolio-name-match.spec.ts.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createImportFake, confirmRequest, toCsv, type Row } from './importRouteHarness';
@@ -821,5 +828,190 @@ describe('import confirm — C16: rejected and ignored rows are reported in the 
       "Imported 1 transaction. 1 row rejected — failed validation or portfolio matching (see rejectedRows). 1 'GBP' placeholder row ignored (see ignoredRows). " +
       '1 row skipped — no reliable currency conversion; 1 row skipped — required cash_value was blank (see skippedCashLeg).',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C18 (FIXED 2026-09-24): a CSV portfolio name must equal the portfolio's one
+// effective import name (import_name when set, else the display name), trimmed
+// and case-insensitive. Before the fix the route fell back to
+// first-12-characters, starts-with and contains matching, and took the first
+// similar portfolio it found.
+// ---------------------------------------------------------------------------
+
+describe('import — C18: a CSV portfolio name must equal one of the user\'s effective import names (trimmed, case-insensitive)', () => {
+  // The real DEV portfolio set after the C18 backfill, plus another user's portfolios.
+  const OWN: Row[] = [
+    { id: 'p-ibkr-isa', name: 'IBKR ISA STK (U9407868)', import_name: 'IBKR ISA STK', base_currency: 'GBP', user_id: 'user-1' },
+    { id: 'p-ibkr-trd', name: 'IBKR TRD STK (U6842190)', import_name: 'IBKR TRD STK', base_currency: 'GBP', user_id: 'user-1' },
+    { id: 'p-etro-trd', name: 'ETRO TRD STK', import_name: null, base_currency: 'USD', user_id: 'user-1' },
+    { id: 'p-t212-isa', name: 'T212 ISA STK', import_name: null, base_currency: 'GBP', user_id: 'user-1' },
+    { id: 'p-t212-trd', name: 'T212 TRD STK', import_name: null, base_currency: 'GBP', user_id: 'user-1' },
+    { id: 'p-hgld-isa', name: 'HGLD ISA STK', import_name: null, base_currency: 'GBP', user_id: 'user-1' },
+    { id: 'p-other-user', name: 'Someone Else', import_name: null, base_currency: 'GBP', user_id: 'user-2' },
+    { id: 'p-other-user-ibkr', name: 'Their IBKR', import_name: 'OTHER IBKR', base_currency: 'GBP', user_id: 'user-2' },
+  ];
+
+  const buy = (portfolio: string): CsvRow => ({ portfolio, date_time: NO_CACHE_DATE, ticker: 'VOD.L', transaction_type: 'BUY', quantity: 1, price: 10, fee: 0, cash_value: 10 });
+  const csvOf = (rows: CsvRow[]) => toCsv(COLUMNS, rows.map((r) => COLUMNS.map((c) => r[c] ?? '')));
+
+  async function run(stage: 'preview' | 'confirm', rows: CsvRow[], portfolios: Row[] = OWN) {
+    const fake = createImportFake({ portfolios, assets: ASSETS, asset_aliases: [], fx_rates: FX_RATES });
+    h.client = fake.client;
+    const req = stage === 'confirm'
+      ? confirmRequest(csvOf(rows))
+      : (() => {
+          const fd = new FormData();
+          fd.append('file', new File([csvOf(rows)], 'import.csv', { type: 'text/csv' }));
+          return new Request('http://localhost/api/import-transactions?stage=preview', { method: 'POST', body: fd });
+        })();
+    const res = await POST(req as any);
+    return { status: res.status, body: await res.json(), inserted: fake.transactionInserts[0] ?? [], fake };
+  }
+
+  it('the portfolios query reads import_name, scoped to the session user', async () => {
+    const { fake } = await run('confirm', [buy('IBKR ISA STK')]);
+    expect(fake.calls).toContainEqual({ table: 'portfolios', op: 'select', columns: 'id, name, base_currency, import_name' });
+    expect(fake.calls).toContainEqual({ table: 'portfolios', op: 'eq', column: 'user_id', value: 'user-1' });
+  });
+
+  it('the IBKR short import names import into the portfolios displayed with the account-number suffix', async () => {
+    const { status, body, inserted } = await run('confirm', [buy('IBKR ISA STK'), buy('IBKR TRD STK')]);
+    expect(status).toBe(200);
+    expect(body.rejectedRows).toEqual([]);
+    expect(inserted.map((r) => r.portfolio_id)).toEqual(['p-ibkr-isa', 'p-ibkr-trd']);
+  });
+
+  it('the full suffixed IBKR display name is rejected once import_name is set', async () => {
+    const { status, body, inserted } = await run('confirm', [buy('IBKR ISA STK (U9407868)'), buy('IBKR TRD STK (U6842190)'), buy('IBKR ISA STK')]);
+    expect(status).toBe(200);
+    expect(inserted.map((r) => r.portfolio_id)).toEqual(['p-ibkr-isa']);
+    expect(body.rejectedRows).toEqual([
+      { row: 2, reason: "No matching portfolio for 'IBKR ISA STK (U9407868)'" },
+      { row: 3, reason: "No matching portfolio for 'IBKR TRD STK (U6842190)'" },
+    ]);
+  });
+
+  it('ETRO and T212 (import_name null) match via their display names', async () => {
+    const { body, inserted } = await run('confirm', [buy('ETRO TRD STK'), buy('T212 ISA STK'), buy('T212 TRD STK')]);
+    expect(body.rejectedRows).toEqual([]);
+    expect(inserted.map((r) => [r.portfolio_id, r.cash_ccy])).toEqual([
+      ['p-etro-trd', 'USD'],
+      ['p-t212-isa', 'GBP'],
+      ['p-t212-trd', 'GBP'],
+    ]);
+  });
+
+  it('matching is trimmed, case-insensitive and exact', async () => {
+    const { body, inserted } = await run('confirm', [buy('ibkr isa stk'), buy('  IBKR TRD STK  '), buy('etro trd stk'), buy('T212 isa STK')]);
+    expect(body.rejectedRows).toEqual([]);
+    expect(inserted.map((r) => r.portfolio_id)).toEqual(['p-ibkr-isa', 'p-ibkr-trd', 'p-etro-trd', 'p-t212-isa']);
+  });
+
+  it('substring and prefix names are rejected, reported and not imported', async () => {
+    const { status, body, inserted } = await run('confirm', [
+      buy('ISA'),
+      buy('IBKR'),
+      buy('IBKR ISA'),
+      buy('T212'),
+      buy('ETRO TRD STK 2'),
+      buy('IBKR ISA STK (U1234567)'),
+      buy('T212 ISA STK'),
+    ]);
+    expect(status).toBe(200);
+    expect(inserted.map((r) => r.portfolio_id)).toEqual(['p-t212-isa']);
+    expect(body.rejectedRows).toEqual([
+      { row: 2, reason: "No matching portfolio for 'ISA'" },
+      { row: 3, reason: "No matching portfolio for 'IBKR'" },
+      { row: 4, reason: "No matching portfolio for 'IBKR ISA'" },
+      { row: 5, reason: "No matching portfolio for 'T212'" },
+      { row: 6, reason: "No matching portfolio for 'ETRO TRD STK 2'" },
+      { row: 7, reason: "No matching portfolio for 'IBKR ISA STK (U1234567)'" },
+    ]);
+    expect(body.message).toBe('Imported 1 transaction. 6 rows rejected — failed validation or portfolio matching (see rejectedRows).');
+  });
+
+  it('"ISA" does not match "ISA Account", "Trading" does not match "Trading 212", and similar names never first-match', async () => {
+    const portfolios: Row[] = [
+      { id: 'p-isa-account', name: 'ISA Account', import_name: null, base_currency: 'GBP', user_id: 'user-1' },
+      { id: 'p-trading-212', name: 'Trading 212', import_name: null, base_currency: 'GBP', user_id: 'user-1' },
+      { id: 'p-a', name: 'ZZ IMPORT TEST AAAAAA', import_name: null, base_currency: 'GBP', user_id: 'user-1' },
+      { id: 'p-b', name: 'ZZ IMPORT TEST BBBBBB', import_name: null, base_currency: 'GBP', user_id: 'user-1' },
+    ];
+    const { body, inserted } = await run('confirm', [
+      buy('ISA'),
+      buy('Trading'),
+      buy('ZZ IMPORT TEST BBBBBB'),
+      buy('ZZ IMPORT TEST'),
+      buy('ZZ IMPORT TEST AAAAAA'),
+    ], portfolios);
+    expect(inserted.map((r) => r.portfolio_id)).toEqual(['p-b', 'p-a']);
+    expect(body.rejectedRows.map((r: any) => r.row)).toEqual([2, 3, 5]);
+  });
+
+  it('when no row matches, nothing is imported (existing all-rows-dropped HTTP 400)', async () => {
+    const { status, body, fake } = await run('confirm', [buy('ISA'), buy('IBKR ISA STK (U9407868)')]);
+    expect(status).toBe(400);
+    expect(body.message).toBe('No transactions to insert');
+    expect(body.errors).toEqual([
+      { row: 2, issues: [{ message: "No matching portfolio for 'ISA'" }] },
+      { row: 3, issues: [{ message: "No matching portfolio for 'IBKR ISA STK (U9407868)'" }] },
+    ]);
+    expect(fake.transactionInserts).toHaveLength(0);
+  });
+
+  it('preview counts an unmatched name as an invalid row with the same reason', async () => {
+    const { status, body } = await run('preview', [buy('IBKR ISA STK (U9407868)'), buy('IBKR ISA STK')]);
+    expect(status).toBe(200);
+    expect(body.validCount).toBe(1);
+    expect(body.invalidCount).toBe(1);
+    expect(body.errors).toEqual([{ row: 2, issues: [{ message: "No matching portfolio for 'IBKR ISA STK (U9407868)'" }] }]);
+  });
+
+  it('another user\'s portfolio (by display name or import_name) is indistinguishable from a nonexistent one, in preview and confirm', async () => {
+    const reasonFor = (name: string) => `No matching portfolio for '${name}'`;
+    for (const stage of ['preview', 'confirm'] as const) {
+      for (const theirs of ['Someone Else', 'OTHER IBKR', 'Their IBKR']) {
+        const other = await run(stage, [buy(theirs), buy('IBKR ISA STK')]);
+        const missing = await run(stage, [buy('Nobody Here'), buy('IBKR ISA STK')]);
+        expect(other.status).toBe(missing.status);
+        if (stage === 'preview') {
+          expect(other.body.errors).toEqual([{ row: 2, issues: [{ message: reasonFor(theirs) }] }]);
+          expect(missing.body.errors).toEqual([{ row: 2, issues: [{ message: reasonFor('Nobody Here') }] }]);
+          expect(other.body.availablePortfolios).toEqual(missing.body.availablePortfolios);
+          expect(other.body.availablePortfolios.map((p: any) => p.id)).not.toContain('p-other-user');
+          expect(other.body.availablePortfolios.map((p: any) => p.id)).not.toContain('p-other-user-ibkr');
+        } else {
+          expect(other.body.rejectedRows).toEqual([{ row: 2, reason: reasonFor(theirs) }]);
+          expect(missing.body.rejectedRows).toEqual([{ row: 2, reason: reasonFor('Nobody Here') }]);
+          expect(other.body.message).toBe(missing.body.message);
+          expect(other.inserted.map((r) => r.portfolio_id)).toEqual(['p-ibkr-isa']);
+        }
+      }
+    }
+  });
+
+  it('a same-name portfolio owned by another user does not make the user\'s own match ambiguous', async () => {
+    const shared: Row[] = [
+      { id: 'p-mine', name: 'Mine (U1)', import_name: 'IBKR ISA STK', base_currency: 'GBP', user_id: 'user-1' },
+      { id: 'p-theirs', name: 'IBKR ISA STK', import_name: null, base_currency: 'GBP', user_id: 'user-2' },
+    ];
+    const { body, inserted } = await run('confirm', [buy('ibkr isa stk')], shared);
+    expect(body.rejectedRows).toEqual([]);
+    expect(inserted.map((r) => r.portfolio_id)).toEqual(['p-mine']);
+  });
+
+  it('runtime ambiguity (the database index should prevent it): one portfolio\'s import_name equals another\'s display name — the row is rejected, neither is chosen', async () => {
+    const dupes: Row[] = [
+      { id: 'p-a', name: 'IBKR ISA STK', import_name: null, base_currency: 'GBP', user_id: 'user-1' },
+      { id: 'p-b', name: 'Something Else', import_name: ' ibkr isa stk ', base_currency: 'GBP', user_id: 'user-1' },
+      { id: 'p-c', name: 'Other', import_name: null, base_currency: 'GBP', user_id: 'user-1' },
+    ];
+    const { status, body, inserted } = await run('confirm', [buy('IBKR ISA STK'), buy('Other')], dupes);
+    expect(status).toBe(200);
+    expect(inserted.map((r) => r.portfolio_id)).toEqual(['p-c']);
+    expect(body.rejectedRows).toEqual([
+      { row: 2, reason: "Portfolio name 'IBKR ISA STK' matches more than one of your portfolios; rename them so each name is unique" },
+    ]);
   });
 });
