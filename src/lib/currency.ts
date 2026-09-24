@@ -16,20 +16,3 @@ export function getCurrencySymbol(code?: string): string {
   const symbol = currencySymbols[upper];
   return symbol ?? '';
 }
-
-// Convert an amount from one currency to another using your fxRates map.
-// Example: convertAmount(2.92, 'USD', 'GBP', fxRates)
-export function convertAmount(
-  amount: number,
-  fromCcy?: string,
-  toCcy: string = 'GBP',
-  fxRates: Record<string, number> = {}
-): number {
-  const from = (fromCcy ?? 'GBP').toUpperCase();
-  const to = (toCcy ?? 'GBP').toUpperCase();
-  const rateFrom = fxRates[from] ?? 1;
-  const rateTo = fxRates[to] ?? 1;
-  if (!rateTo) return amount;
-  return amount * (rateFrom / rateTo);
-}
-
