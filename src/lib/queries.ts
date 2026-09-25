@@ -162,7 +162,7 @@ const OPEN_COST_AFFECTING_TYPES = new Set(['BUY', 'SELL', 'TIN', 'TOT']);
 
 // --------------------------- Utilities ---------------------------
 
-const isCashTicker = (t?: string | null) => !!t && t.startsWith('CASH.');
+export const isCashTicker = (t?: string | null) => !!t && t.startsWith('CASH.');
 
 function round(n: number, dp = 6) {
   const p = Math.pow(10, dp);

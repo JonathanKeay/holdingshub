@@ -9,7 +9,23 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { supabaseBrowser as supabase } from '@/lib/supabase/browser';
 import { formatCurrency } from '@/lib/formatCurrency';
 import { IconEdit, IconTrash } from '@/components/icons';
+import { Eye } from 'lucide-react';
 import { resolveCashLeg, deriveAssetToBaseRate } from '@/lib/cashLeg';
+import { findTransferLink, type TransferRecord } from '@/lib/transactionDeleteSafety';
+import {
+  deleteTransactionSafely,
+  loadDeleteAssessment,
+  updateTransactionNotes,
+  TRANSFER_LINK_COLUMNS,
+} from '@/lib/transactionMutations';
+import {
+  DeleteTransactionDialog,
+  EditNotesDialog,
+  TransactionDetailsDialog,
+  type DeleteDialogState,
+  type TransactionView,
+  type TransferLinkState,
+} from '@/components/transactions/TransactionDialogs';
 
 function formatDate(dateStr: string): string {
   const date = new Date(dateStr);
@@ -22,18 +38,51 @@ function formatDate(dateStr: string): string {
 type TransactionRow = {
   id: string;
   date: string;
+  created_at: string | null;
   type: string; // e.g. BUY, SELL, TIN, TOT, DIV, INT, DEP, WIT, FEE, SPL, OTR
   quantity: number;
   price: number;
   fee: number;
   cash_value: number | null;
   cash_ccy: string | null;
+  cash_fx_to_portfolio: number | null;
+  settle_value: number | null;
+  settle_ccy: string | null;
   notes: string;
   ticker: string;
   portfolio_name: string;
   currency: string;
   split_factor?: number | null; // used for SPL only
+  // Stored values exactly as read (null stays null), for View Details.
+  raw: { quantity: number | null; price: number | null; fee: number | null };
 };
+
+// Financial fields are immutable after creation/import: a row can only be
+// viewed, have its notes edited, or be deleted after a safety check
+// (src/lib/transactionDeleteSafety.ts). A wrong transaction is deleted and the
+// corrected one added or imported.
+function toView(tx: TransactionRow): TransactionView {
+  return {
+    id: tx.id,
+    portfolio_name: tx.portfolio_name,
+    ticker: tx.ticker,
+    type: tx.type,
+    date: tx.date,
+    created_at: tx.created_at,
+    quantity: tx.raw.quantity,
+    price: tx.raw.price,
+    fee: tx.raw.fee,
+    cash_value: tx.cash_value,
+    cash_ccy: tx.cash_ccy,
+    settle_value: tx.settle_value,
+    settle_ccy: tx.settle_ccy,
+    cash_fx_to_portfolio: tx.cash_fx_to_portfolio,
+    split_factor: tx.split_factor ?? null,
+    notes: tx.notes === '' ? null : tx.notes,
+  };
+}
+
+const numOrNull = (v: unknown) => (v == null ? null : Number(v));
 
 type PortfolioOption = { id: string; name: string; base_currency?: string };
 
@@ -58,8 +107,17 @@ function TransactionsPageInner() {
   const [transactions, setTransactions] = useState<TransactionRow[]>([]);
   const [sortColumn, setSortColumn] = useState<'date' | 'ticker' | 'type' | null>('date');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
-  const [editingTx, setEditingTx] = useState<TransactionRow | null>(null);
-  const [editValues, setEditValues] = useState<Partial<TransactionRow>>({});
+  // null = transfer records could not be read (shown as "Unknown").
+  const [transfers, setTransfers] = useState<TransferRecord[] | null>([]);
+  const [viewTx, setViewTx] = useState<TransactionRow | null>(null);
+  const [notesTx, setNotesTx] = useState<TransactionRow | null>(null);
+  const [notesSaving, setNotesSaving] = useState(false);
+  const [notesError, setNotesError] = useState<string | null>(null);
+  const [deleteTx, setDeleteTx] = useState<TransactionRow | null>(null);
+  const [deleteState, setDeleteState] = useState<DeleteDialogState>({ phase: 'checking' });
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [banner, setBanner] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
 
   const [filterDateFrom, setFilterDateFrom] = useState(searchParams.get('dateFrom') || '');
   const [filterDateTo, setFilterDateTo] = useState(searchParams.get('dateTo') || '');
@@ -149,7 +207,8 @@ function TransactionsPageInner() {
     const query = supabase
       .from('transactions')
       .select(`
-        id, date, type, quantity, price, fee, cash_value, cash_ccy, notes, split_factor,
+        id, date, created_at, type, quantity, price, fee, cash_value, cash_ccy, cash_fx_to_portfolio,
+        settle_value, settle_ccy, notes, split_factor,
         assets ( ticker, currency ),
         portfolios ( name )
       `)
@@ -168,6 +227,11 @@ function TransactionsPageInner() {
     const mapped = data.map((t: any) => ({
       id: t.id,
       date: t.date,
+      created_at: t.created_at ?? null,
+      cash_fx_to_portfolio: numOrNull(t.cash_fx_to_portfolio),
+      settle_value: numOrNull(t.settle_value),
+      settle_ccy: t.settle_ccy ?? null,
+      raw: { quantity: numOrNull(t.quantity), price: numOrNull(t.price), fee: numOrNull(t.fee) },
       type: (t.type ?? '').toString().toUpperCase(),
       quantity: Number(t.quantity ?? 0),
       price: Number(t.price ?? 0),
@@ -182,6 +246,10 @@ function TransactionsPageInner() {
     })) as TransactionRow[];
 
     setTransactions(mapped);
+
+    const { data: tr, error: trError } = await supabase.from('transfers').select(TRANSFER_LINK_COLUMNS);
+    if (trError) console.error('Error fetching transfers:', trError);
+    setTransfers(trError ? null : ((tr ?? []) as TransferRecord[]));
   }
 
   // In useEffect, just call fetchTransactions()
@@ -198,12 +266,6 @@ function TransactionsPageInner() {
   const selectedPortfolio = useMemo(
     () => portfolios.find((p) => p.id === newTx.portfolio_id) || null,
     [portfolios, newTx.portfolio_id]
-  );
-
-  // Editing modal selected asset (updates when ticker selection changes)
-  const editingAsset = useMemo(
-    () => tickers.find((t) => t.ticker === (editValues.ticker ?? editingTx?.ticker)) || null,
-    [tickers, editValues.ticker, editingTx?.ticker]
   );
 
   const filteredTransactions = transactions.filter((tx) => {
@@ -239,89 +301,70 @@ function TransactionsPageInner() {
     return 'text-foreground/70';
   }
 
-  async function handleSaveEdit() {
-    if (!editingTx) return;
-
-    const tType = (editValues.type ?? editingTx.type ?? '').toString().toUpperCase();
-    const payload: any = { ...editValues, type: tType };
-
-    // Always look up asset_id by ticker
-    const tickerToUse = editValues.ticker ?? editingTx.ticker;
-    if (tickerToUse) {
-      const { data: asset, error: assetError } = await supabase
-        .from('assets')
-        .select('id')
-        .eq('ticker', tickerToUse)
-        .single();
-      if (assetError || !asset) {
-        alert('Ticker not found in assets table.');
-        return;
-      }
-      payload.asset_id = asset.id;
-    }
-
-    // Remove ticker from payload before update
-    delete payload.ticker;
-
-    if (tType === 'SPL') {
-      payload.split_factor = editValues.split_factor ?? editingTx.split_factor ?? null;
-      // Clean out numeric fields for SPL (no cash flow)
-      payload.quantity = 0;
-      payload.price = 0;
-      payload.fee = 0;
-      payload.gbp_value = 0;
-    } else {
-      // Non-SPL: ensure split_factor is null to avoid confusion
-      payload.split_factor = null;
-      // Normalize numeric fields
-      if (payload.quantity != null) payload.quantity = Number(payload.quantity);
-      if (payload.price != null) payload.price = Number(payload.price);
-      if (payload.fee != null) payload.fee = Number(payload.fee);
-      if (payload.gbp_value != null) payload.gbp_value = Number(payload.gbp_value);
-    }
-
-    const { error } = await supabase.from('transactions').update(payload).eq('id', editingTx.id).select();
-
-    if (!error) {
-      setTransactions((prev) =>
-        prev.map((t) => (t.id === editingTx.id ? { ...t, ...payload, ticker: editValues.ticker ?? t.ticker } : t))
-      );
-      setEditingTx(null);
-      setEditValues({});
-    } else {
-      console.error('Error updating transaction:', error);
-    }
+  function transferLinkFor(id: string): TransferLinkState {
+    if (transfers == null) return 'unknown';
+    return findTransferLink(id, transfers);
   }
 
-  function handleEdit(id: string) {
-    const tx = transactions.find((t) => t.id === id);
-    if (tx) {
-      setEditingTx(tx);
-      setEditValues({
-        ticker: tx.ticker, // <-- add this line
-        quantity: tx.quantity,
-        price: tx.price,
-        fee: tx.fee,
-        notes: tx.notes,
-        type: tx.type,
-        split_factor: tx.split_factor ?? undefined,
-        cash_value: tx.cash_value ?? undefined,
-      });
-    }
+  function openNotes(tx: TransactionRow) {
+    setNotesError(null);
+    setNotesTx(tx);
   }
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this transaction?')) return;
-    const { error } = await supabase
-      .from('transactions')
-      .delete()
-      .eq('id', id);
-    if (error) {
-      alert('Delete failed: ' + error.message);
-    } else {
-      fetchTransactions(); // <-- update here
+  async function handleSaveNotes(notes: string) {
+    if (!notesTx) return;
+    setNotesSaving(true);
+    setNotesError(null);
+    // Only the notes column is sent (updateTransactionNotes).
+    const result = await updateTransactionNotes(supabase, notesTx.id, notes);
+    setNotesSaving(false);
+    if (result.status === 'error') {
+      setNotesError(result.message);
+      return;
     }
-  };
+    const saved = result.notes ?? '';
+    setTransactions((prev) => prev.map((t) => (t.id === notesTx.id ? { ...t, notes: saved } : t)));
+    setNotesTx(null);
+    setBanner({ kind: 'success', text: 'Notes saved.' });
+  }
+
+  async function openDelete(tx: TransactionRow) {
+    setBanner(null);
+    setDeleteError(null);
+    setDeleting(false);
+    setDeleteTx(tx);
+    setDeleteState({ phase: 'checking' });
+    const ctx = await loadDeleteAssessment(supabase, tx.id);
+    setDeleteState(
+      ctx.status === 'ok' ? { phase: 'ready', assessment: ctx.assessment } : { phase: 'error', message: ctx.message }
+    );
+  }
+
+  async function handleConfirmDelete() {
+    if (!deleteTx) return;
+    setDeleting(true);
+    setDeleteError(null);
+    // Re-checks safety against fresh data before the hard delete.
+    const result = await deleteTransactionSafely(supabase, deleteTx.id);
+    setDeleting(false);
+    if (result.status === 'blocked') {
+      setDeleteState({ phase: 'ready', assessment: result.assessment });
+      return;
+    }
+    if (result.status === 'error') {
+      setDeleteError(result.message);
+      return;
+    }
+    const removed = deleteTx;
+    setDeleteTx(null);
+    await fetchTransactions();
+    setBanner({
+      kind: 'success',
+      text:
+        `Deleted ${removed.type} ${removed.ticker} dated ${formatDate(removed.date)} from ${removed.portfolio_name}. ` +
+        `Portfolio cash and holdings now reflect this. Add or import the corrected transaction if needed.`,
+    });
+  }
 
   async function handleCreate() {
     // Basic validation
@@ -426,6 +469,18 @@ function TransactionsPageInner() {
         <h2 className="text-xl font-semibold mb-4">
           {portfolioFilter ? 'Transactions for Portfolio' : 'All Transactions'}
         </h2>
+
+        {banner && (
+          <div
+            role={banner.kind === 'error' ? 'alert' : 'status'}
+            className={`mb-3 rounded border px-3 py-2 text-sm flex items-start justify-between gap-3 ${
+              banner.kind === 'success' ? 'border-tgreen text-tgreen' : 'border-tred text-tred'
+            }`}
+          >
+            <span>{banner.text}</span>
+            <button onClick={() => setBanner(null)} className="text-foreground/60 hover:text-foreground" aria-label="Dismiss">✕</button>
+          </div>
+        )}
 
         {/* Add BUY/SELL inline form */}
         <div className="mb-3">
@@ -663,7 +718,7 @@ function TransactionsPageInner() {
               <th className="p-2 text-right">Fee</th>
               <th className="p-2 text-right">Cash Value</th>
               <th className="p-2 min-w-[160px]">Notes</th>
-              <th className="p-2">Edit</th>
+              <th className="p-2">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -694,16 +749,26 @@ function TransactionsPageInner() {
                 <td className="p-2">
                   <div className="inline-flex justify-end gap-2">
                     <button
-                      onClick={() => handleEdit(tx.id)}
+                      onClick={() => setViewTx(tx)}
                       className="text-accent hover:text-accent/80"
-                      title="Edit"
+                      title="View details"
+                      aria-label="View details"
+                    >
+                      <Eye className="inline w-6 h-6" />
+                    </button>
+                    <button
+                      onClick={() => openNotes(tx)}
+                      className="text-accent hover:text-accent/80"
+                      title="Edit notes"
+                      aria-label="Edit notes"
                     >
                       <IconEdit className="inline w-6 h-6" />
                     </button>
                     <button
-                      onClick={() => handleDelete(tx.id)}
+                      onClick={() => openDelete(tx)}
                       className="text-tred hover:text-tred-hover"
                       title="Delete"
+                      aria-label="Delete"
                     >
                       <IconTrash className="inline w-6 h-6" />
                     </button>
@@ -715,164 +780,29 @@ function TransactionsPageInner() {
         </table>
       </div>
 
-      {editingTx && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-background rounded p-6 w-full max-w-md shadow-xl">
-            <h3 className="text-lg font-semibold mb-4">Edit Transaction</h3>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-sm">Ticker</label>
-                <select
-                  value={editValues.ticker ?? editingTx.ticker ?? ''}
-                  onChange={(e) =>
-                    setEditValues({ ...editValues, ticker: e.target.value })
-                  }
-                  className="border px-2 py-1 w-full rounded font-mono"
-                >
-                  <option value="">-- Select Ticker --</option>
-                  {tickers.map((t) => (
-                    <option key={t.id} value={t.ticker}>
-                      {t.ticker}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm">Type</label>
-                <select
-                  value={editValues.type && editValues.type !== '' ? editValues.type : editingTx.type ?? ''}
-                  onChange={(e) => {
-                    const val = e.target.value.toUpperCase();
-                    setEditValues({ ...editValues, type: val === '' ? undefined : val });
-                  }}
-                  className="border px-2 py-1 w-full rounded"
-                >
-                  <option value="">-- Select Type --</option>
-                  <option value="BUY">Buy</option>
-                  <option value="SELL">Sell</option>
-                  <option value="TIN">Transfer In</option>
-                  <option value="TOT">Transfer Out</option>
-                  <option value="DIV">Dividend</option>
-                  <option value="INT">Interest</option>
-                  <option value="DEP">Deposit</option>
-                  <option value="WIT">Withdrawal</option>
-                  <option value="FEE">Fee</option>
-                  <option value="SPL">Split</option>
-                  <option value="OTR">Other</option>
-                  <option value="BAL">Balance Adjust</option> {/* <-- Add this line */}
-                </select>
-              </div>
+      {viewTx && (
+        <TransactionDetailsDialog tx={toView(viewTx)} transferLink={transferLinkFor(viewTx.id)} onClose={() => setViewTx(null)} />
+      )}
 
-              {/* If SPL, show only Split Factor. Otherwise show qty/price/fee */}
-              {(editValues.type ?? editingTx.type).toUpperCase() === 'SPL' ? (
-                <div>
-                  <label className="block text-sm">Split Factor</label>
-                  <input
-                    type="number"
-                    step="0.0001"
-                    value={editValues.split_factor ?? ''}
-                    onChange={(e) =>
-                      setEditValues({
-                        ...editValues,
-                        split_factor: e.target.value === '' ? undefined : parseFloat(e.target.value),
-                      })
-                    }
-                    className="border px-2 py-1 w-full rounded"
-                    placeholder="e.g. 2 for 1 = 2, reverse 1 for 5 = 0.2"
-                  />
-                  <p className="text-xs text-foreground/60 mt-1">
-                    2-for-1 ⇒ 2.0 &nbsp;•&nbsp; 1-for-5 (reverse) ⇒ 0.2
-                  </p>
-                </div>
-              ) : (
-                <>
-                  <div>
-                    <label className="block text-sm">Quantity</label>
-                    <input
-                      type="number"
-                      value={editValues.quantity ?? ''}
-                      onChange={(e) =>
-                        setEditValues({
-                          ...editValues,
-                          quantity: e.target.value === '' ? undefined : parseFloat(e.target.value),
-                        })
-                      }
-                      className="border px-2 py-1 w-full rounded"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm">Price</label>
-                    <input
-                      type="number"
-                      value={editValues.price ?? ''}
-                      onChange={(e) =>
-                        setEditValues({
-                          ...editValues,
-                          price: e.target.value === '' ? undefined : parseFloat(e.target.value),
-                        })
-                      }
-                      className="border px-2 py-1 w-full rounded"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm">Fee ({editingAsset?.currency || editingTx?.currency || ''})</label>
-                    <input
-                      type="number"
-                      value={editValues.fee ?? ''}
-                      onChange={(e) =>
-                        setEditValues({
-                          ...editValues,
-                          fee: e.target.value === '' ? undefined : parseFloat(e.target.value),
-                        })
-                      }
-                      className="border px-2 py-1 w-full rounded"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm">Cash Value</label>
-                    <input
-                      type="number"
-                      value={editValues.cash_value ?? ''}
-                      onChange={(e) =>
-                        setEditValues({
-                          ...editValues,
-                          cash_value: e.target.value === '' ? undefined : parseFloat(e.target.value),
-                        })
-                      }
-                      className="border px-2 py-1 w-full rounded"
-                    />
-                    <p className="text-xs text-foreground/60 mt-1">Currency: set in row via cash_ccy field (optional)</p>
-                  </div>
-                </>
-              )}
+      {notesTx && (
+        <EditNotesDialog
+          tx={toView(notesTx)}
+          saving={notesSaving}
+          error={notesError}
+          onSave={handleSaveNotes}
+          onClose={() => setNotesTx(null)}
+        />
+      )}
 
-              <div>
-                <label className="block text-sm">Notes</label>
-                <input
-                  type="text"
-                  value={editValues.notes ?? ''}
-                  onChange={(e) => setEditValues({ ...editValues, notes: e.target.value })}
-                  className="border px-2 py-1 w-full rounded"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 mt-4">
-              <button
-                onClick={() => setEditingTx(null)}
-                className="px-4 py-2 rounded bg-gray-back text-foreground hover:bg-Thoverlight-tint"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveEdit}
-                className="px-4 py-2 rounded bg-themeblue text-white hover:bg-themeblue-hover ml-2"
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
+      {deleteTx && (
+        <DeleteTransactionDialog
+          tx={toView(deleteTx)}
+          state={deleteState}
+          deleting={deleting}
+          error={deleteError}
+          onConfirm={handleConfirmDelete}
+          onClose={() => setDeleteTx(null)}
+        />
       )}
     </section>
   );

@@ -19,6 +19,13 @@ export default defineConfig({
       '@': path.resolve(__dirname, 'src'),
     },
   },
+  // tsconfig.json uses "jsx": "preserve" (Next.js compiles JSX itself), which
+  // leaves Vite on the classic React.createElement transform. The automatic
+  // runtime matches Next.js, so component files render in tests without an
+  // explicit `import React`. Test-only; the Next.js build is unaffected.
+  esbuild: {
+    jsx: 'automatic',
+  },
   test: {
     environment: 'node',
     include: ['tests/**/*.spec.ts'],
