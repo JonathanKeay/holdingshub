@@ -148,7 +148,7 @@ async function loadActivePositionTickers(client: SupabaseClient): Promise<{ us: 
   const rows: Txn[] = [];
   let from = 0; const page = 1000;
   while (true) {
-    const { data, error } = await client.from('transactions').select('*').range(from, from + page - 1);
+    const { data, error } = await client.from('transactions').select('*').order('id').range(from, from + page - 1); // id order: stable pages
     if (error) throw error;
     if (!data || data.length === 0) break;
     rows.push(...(data as Txn[]));

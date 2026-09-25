@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { performance } from 'node:perf_hooks';
 import { type Ccy, type Txn, type AssetMeta, isCashTicker, newCashMap, applyCashTxn } from '@/lib/portfolio-series-cash';
 import { compareTransactionsForReplay } from '@/lib/transactionOrdering';
+import { fetchAllTable } from './fetchAllTable';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,26 +20,6 @@ type AssetRow = {
   resolved_ticker?: string | null;
   price_multiplier?: number | null;
 };
-
-async function fetchAllTable<T = any>(
-  supabase: any,
-  table: string,
-  opts?: { pageSize?: number; select?: string }
-): Promise<T[]> {
-  const rows: T[] = [];
-  let from = 0;
-  const pageSize = Math.min(opts?.pageSize ?? 1000, 1000);
-  const select = opts?.select ?? '*';
-  while (true) {
-    const { data, error } = await supabase.from(table).select(select).range(from, from + pageSize - 1);
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-    rows.push(...(data as T[]));
-    if (data.length < pageSize) break;
-    from += pageSize;
-  }
-  return rows;
-}
 
 async function fetchAllPaged<T>(opts: {
   pageSize?: number;

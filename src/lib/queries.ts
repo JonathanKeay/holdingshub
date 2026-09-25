@@ -1098,6 +1098,7 @@ async function fetchAllTable<T = any>(
     const { data, error } = await supabase
       .from(table)
       .select('*')
+      .order('id') // unique, so rows cannot be skipped or repeated at a page boundary
       .range(from, from + pageSize - 1);
     if (error) throw error;
     if (!data || data.length === 0) break;
