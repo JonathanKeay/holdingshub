@@ -4,6 +4,7 @@
 import { revalidatePath } from 'next/cache';
 import { getSupabaseServerClient } from '@/lib/supabase-server';
 import { computeBalancePreview, type AssetMeta, type Ccy, type Txn } from '@/lib/queries';
+import { fetchAllPages, type PagedQuery } from '@/lib/fetchAllPages';
 
 const CC = (s?: string | null) => String(s || '').toUpperCase();
 
@@ -77,11 +78,15 @@ export async function processBalanceAction(_prev: any, formData: FormData) {
 
   // Canonical fields only (id, asset_id, type, date, quantity, price, fee,
   // cash_value, cash_ccy) — the same fields calculateCashBalancesMulti reads
-  // for the dashboard. gbp_value is never used here.
-  const { data: txnRows, error: fetchErr } = await supabase
-    .from('transactions')
-    .select('id, portfolio_id, asset_id, type, date, quantity, price, fee, cash_value, cash_ccy')
-    .eq('portfolio_id', portfolio_id);
+  // for the dashboard. gbp_value is never used here. Paged, so a portfolio
+  // with more than 1,000 transactions is never silently truncated.
+  const { data: txnRows, error: fetchErr } = await fetchAllPages<Txn>(
+    () =>
+      supabase
+        .from('transactions')
+        .select('id, portfolio_id, asset_id, type, date, quantity, price, fee, cash_value, cash_ccy')
+        .eq('portfolio_id', portfolio_id) as unknown as PagedQuery<Txn>
+  );
 
   if (fetchErr) {
     return {
@@ -96,9 +101,10 @@ export async function processBalanceAction(_prev: any, formData: FormData) {
     };
   }
 
-  const { data: assetRows, error: assetsErr } = await supabase
-    .from('assets')
-    .select('id, ticker, currency');
+  type AssetRow = { id: string; ticker: string; currency: string | null };
+  const { data: assetRows, error: assetsErr } = await fetchAllPages<AssetRow>(
+    () => supabase.from('assets').select('id, ticker, currency') as unknown as PagedQuery<AssetRow>
+  );
 
   if (assetsErr) {
     return {

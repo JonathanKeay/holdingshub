@@ -12,6 +12,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AssetMeta, Ccy, Txn } from './queries';
 import { assessTransactionDelete, type DeleteAssessment, type TransferRecord } from './transactionDeleteSafety';
+import { fetchAllPages, type PagedQuery } from './fetchAllPages';
 
 export const TRANSACTION_DETAIL_COLUMNS =
   'id, portfolio_id, asset_id, type, date, created_at, quantity, price, fee, cash_value, cash_ccy, ' +
@@ -23,8 +24,6 @@ export const TRANSFER_LINK_COLUMNS =
 export type TransactionDetail = Txn & { notes?: string | null };
 
 type DbError = { code?: string; message?: string; details?: string; hint?: string } | null | undefined;
-
-const PAGE = 1000;
 
 export const NOT_FOUND_MESSAGE =
   'This transaction could not be found, or you do not have permission to change it. Nothing was changed.';
@@ -43,21 +42,6 @@ export function describeWriteError(error: DbError | unknown, action: 'delete' | 
     return `Could not reach the database. Check your connection and try again. ${nothing}`;
   }
   return `The database did not accept the change. ${nothing}`;
-}
-
-type PagedQuery<T> = {
-  order: (col: string) => { range: (a: number, b: number) => PromiseLike<{ data: T[] | null; error: DbError }> };
-};
-
-async function fetchAll<T>(build: () => PagedQuery<T>): Promise<{ data: T[] | null; error: DbError }> {
-  const out: T[] = [];
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await build().order('id').range(from, from + PAGE - 1);
-    if (error) return { data: null, error };
-    const rows = data ?? [];
-    out.push(...rows);
-    if (rows.length < PAGE) return { data: out, error: null };
-  }
 }
 
 export type DeleteContextResult =
@@ -91,14 +75,14 @@ export async function loadDeleteAssessment(supabase: SupabaseClient, id: string)
   }
 
   type AssetRow = { id: string; ticker: string; currency: string };
-  const txns = await fetchAll<TransactionDetail>(
+  const txns = await fetchAllPages<TransactionDetail>(
     () =>
       supabase
         .from('transactions')
         .select(TRANSACTION_DETAIL_COLUMNS)
         .eq('portfolio_id', row.portfolio_id) as unknown as PagedQuery<TransactionDetail>
   );
-  const assets = await fetchAll<AssetRow>(
+  const assets = await fetchAllPages<AssetRow>(
     () => supabase.from('assets').select('id, ticker, currency') as unknown as PagedQuery<AssetRow>
   );
   if (txns.error || assets.error) {
