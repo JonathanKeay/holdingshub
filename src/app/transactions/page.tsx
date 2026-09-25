@@ -18,6 +18,7 @@ import {
   updateTransactionNotes,
   TRANSFER_LINK_COLUMNS,
 } from '@/lib/transactionMutations';
+import { fetchTransactionListRows } from '@/lib/transactionListQuery';
 import {
   DeleteTransactionDialog,
   EditNotesDialog,
@@ -117,6 +118,7 @@ function TransactionsPageInner() {
   const [deleteState, setDeleteState] = useState<DeleteDialogState>({ phase: 'checking' });
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [banner, setBanner] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
 
   const [filterDateFrom, setFilterDateFrom] = useState(searchParams.get('dateFrom') || '');
@@ -204,25 +206,16 @@ function TransactionsPageInner() {
 
   // Move this function definition outside of useEffect so it's accessible
   async function fetchTransactions() {
-    const query = supabase
-      .from('transactions')
-      .select(`
-        id, date, created_at, type, quantity, price, fee, cash_value, cash_ccy, cash_fx_to_portfolio,
-        settle_value, settle_ccy, notes, split_factor,
-        assets ( ticker, currency ),
-        portfolios ( name )
-      `)
-      .order('date', { ascending: false });
-
-    if (portfolioFilter) {
-      query.eq('portfolio_id', portfolioFilter);
-    }
-
-    const { data, error } = await query;
+    // Paged: a single select is silently capped at 1,000 rows by PostgREST.
+    const { data, error } = await fetchTransactionListRows(supabase, portfolioFilter);
     if (error) {
       console.error('Error fetching transactions:', error);
+      // Never show a partial or stale list as if it were complete.
+      setTransactions([]);
+      setLoadError(`Transactions could not be loaded: ${error.message}. Refresh the page to try again.`);
       return;
     }
+    setLoadError(null);
 
     const mapped = data.map((t: any) => ({
       id: t.id,
@@ -681,6 +674,11 @@ function TransactionsPageInner() {
       </div>
 
       <div className="overflow-x-auto max-h-[80vh] overflow-y-scroll">
+        {loadError && (
+          <div role="alert" className="mb-3 rounded border border-tred px-3 py-2 text-sm text-tred">
+            {loadError}
+          </div>
+        )}
         <p className="mb-2 text-sm text-foreground/70">
           Showing {filteredTransactions.length} transaction{filteredTransactions.length === 1 ? '' : 's'}
           {portfolioFilter ? ` for this portfolio` : ''}
